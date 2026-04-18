@@ -1,0 +1,27 @@
+[Unit]
+Description=Super Memory Agent - Universal AI Memory
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.super_memory/memory_agent.py --port 8080
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+# Security - run as user only
+User=%u
+Group=%G
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.super_memory
+
+[Install]
+WantedBy=default.target

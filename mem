@@ -1,0 +1,491 @@
+#!/usr/bin/env python3
+"""
+Super Memory CLI
+================
+Standalone CLI for Super Memory — works WITHOUT bash hooks.
+
+Usage:
+    mem add "text"           Add entry
+    mem done "task"         Mark task completed
+    mem decision "topic"    Add decision
+    mem blocked "task"      Add blocker
+    mem search "query"      Search
+    mem recent              Recent entries
+    mem summary             Memory summary
+    mem context              AI context
+    mem status              Check agent
+    mem start               Start agent
+    mem stop                Stop agent
+    mem help                Show help
+"""
+
+import sys
+import os
+import json
+import argparse
+from pathlib import Path
+
+# Config
+API_HOST = os.environ.get('SUPER_MEMORY_API', 'http://127.0.0.1:8080')
+AGENT_PATH = Path.home() / ".super_memory" / "memory_agent.py"
+
+
+def api_get(endpoint: str) -> dict:
+    """GET request to memory API."""
+    import urllib.request
+    import urllib.error
+    
+    url = f"{API_HOST}{endpoint}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.URLError as e:
+        return {"error": str(e)}
+
+
+def api_post(endpoint: str, data: dict) -> dict:
+    """POST request to memory API."""
+    import urllib.request
+    import urllib.error
+    
+    url = f"{API_HOST}{endpoint}"
+    payload = json.dumps(data).encode()
+    
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={'Content-Type': 'application/json'}
+    )
+    
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.URLError as e:
+        return {"error": str(e)}
+
+
+def is_agent_running() -> bool:
+    """Check if agent is running."""
+    result = api_get("/health")
+    return "error" not in result
+
+
+def cmd_add(args):
+    """Add entry."""
+    text = ' '.join(args.text) if args.text else ""
+    if not text:
+        print("❌ Error: text required")
+        print("   Usage: mem add \"some text\"")
+        return 1
+    
+    result = api_post("/add", {
+        "text": text,
+        "type": args.type or "general",
+        "source": "cli"
+    })
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    print(f"✅ Added: {text[:50]}...")
+    return 0
+
+
+def cmd_done(args):
+    """Mark task completed."""
+    task = ' '.join(args.task) if args.task else ""
+    if not task:
+        print("❌ Error: task required")
+        print("   Usage: mem done \"implemented auth\"")
+        return 1
+    
+    result = api_post("/add_completed", {
+        "task": task,
+        "source": "cli"
+    })
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    print(f"✅ Completed: {task[:50]}...")
+    return 0
+
+
+def cmd_decision(args):
+    """Add decision."""
+    topic = ' '.join(args.topic) if args.topic else ""
+    decision = args.decision or topic
+    reason = args.reason or ""
+    
+    if not topic:
+        print("❌ Error: topic required")
+        print("   Usage: mem decision \"Use Postgres\" --reason \"Better performance\"")
+        return 1
+    
+    result = api_post("/add_decision", {
+        "topic": topic,
+        "decision": decision,
+        "reason": reason,
+        "source": "cli"
+    })
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    print(f"⚖️ Decision added: {topic[:50]}...")
+    return 0
+
+
+def cmd_blocked(args):
+    """Add blocker."""
+    task = ' '.join(args.task) if args.task else ""
+    blocker = args.blocker or "unknown"
+    needed = args.needed or "TBD"
+    
+    if not task:
+        print("❌ Error: task required")
+        print("   Usage: mem blocked \"API integration\" --blocker \"Waiting for spec\"")
+        return 1
+    
+    result = api_post("/add_blocker", {
+        "task": task,
+        "blocker": blocker,
+        "needed": needed,
+        "source": "cli"
+    })
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    print(f"🚧 Blocker added: {task[:50]}...")
+    return 0
+
+
+def cmd_search(args):
+    """Search memories."""
+    query = ' '.join(args.query) if args.query else ""
+    if not query:
+        print("❌ Error: query required")
+        print("   Usage: mem search \"auth\"")
+        return 1
+    
+    result = api_get(f"/search?q={query}")
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    results = result.get("results", [])
+    
+    if not results:
+        print(f"No results for: {query}")
+        return 0
+    
+    print(f"Found {len(results)} results:\n")
+    for r in results[:10]:
+        print(f"[{r.get('type', '?')}] {r.get('text', '')[:80]}")
+        print()
+    
+    return 0
+
+
+def cmd_recent(args):
+    """Show recent entries."""
+    result = api_get("/recent")
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    memories = result.get("memories", [])
+    
+    if not memories:
+        print("No entries yet")
+        return 0
+    
+    limit = args.limit or 10
+    for m in memories[:limit]:
+        print(f"[{m.get('type', '?')}] {m.get('text', '')[:80]}")
+    
+    return 0
+
+
+def cmd_summary(args):
+    """Show memory summary."""
+    result = api_get("/summary")
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    print()
+    print("📊 Memory Summary")
+    print("=" * 40)
+    print(f"  Total:     {result.get('total', 0)}")
+    print(f"  Completed: {result.get('completed', 0)}")
+    print(f"  Decisions: {result.get('decisions', 0)}")
+    print(f"  Blockers:  {result.get('blockers', 0)}")
+    print(f"  Learnings: {result.get('learnings', 0)}")
+    print()
+    
+    return 0
+
+
+def cmd_context(args):
+    """Get AI context."""
+    result = api_get("/context")
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    context = result.get("context", "")
+    print(context or "No context available")
+    
+    return 0
+
+
+def cmd_status(args):
+    """Check agent status."""
+    if is_agent_running():
+        print("✅ Super Memory running")
+        
+        result = api_get("/summary")
+        if "error" not in result:
+            print(f"   Entries: {result.get('total', '?')}")
+    else:
+        print("❌ Super Memory not running")
+        print(f"   Start: mem start")
+        return 1
+    
+    return 0
+
+
+def cmd_start(args):
+    """Start the agent."""
+    if is_agent_running():
+        print("✅ Already running")
+        return 0
+    
+    # Try launcher first
+    launcher_path = Path.home() / ".super_memory" / "launcher.py"
+    if launcher_path.exists():
+        import subprocess
+        result = subprocess.run([sys.executable, str(launcher_path), "start"])
+        return result.returncode
+    
+    # Direct start
+    if not AGENT_PATH.exists():
+        print(f"❌ Agent not found: {AGENT_PATH}")
+        print("   Run: mem install")
+        return 1
+    
+    import subprocess
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    
+    proc = subprocess.Popen(
+        [sys.executable, str(AGENT_PATH)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True
+    )
+    
+    # Wait
+    import time
+    for i in range(10):
+        time.sleep(0.5)
+        if is_agent_running():
+            print(f"✅ Started (PID: {proc.pid})")
+            return 0
+    
+    print("⚠️  Started but not responding yet")
+    return 0
+
+
+def cmd_stop(args):
+    """Stop the agent."""
+    if not is_agent_running():
+        print("Not running")
+        return 0
+    
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", ":8080"],
+            capture_output=True, text=True
+        )
+        pids = result.stdout.strip().split('\n')
+        for pid in pids:
+            if pid:
+                os.kill(int(pid), 9)
+        print("✅ Stopped")
+    except:
+        print("⚠️  Could not stop")
+        return 1
+    
+    return 0
+
+
+def cmd_install(args):
+    """Install agent and enable auto-start."""
+    print("🔧 Installing Super Memory...")
+    
+    # Create directory
+    super_mem_dir = Path.home() / ".super_memory"
+    super_mem_dir.mkdir(exist_ok=True)
+    
+    # Copy files (skip if same location)
+    import shutil
+    source = Path(__file__).parent
+    
+    # If running from ~/.super_memory, files are already there
+    if source.resolve() != super_mem_dir.resolve():
+        files_to_copy = ["memory_agent.py", "hook.sh", "context_inject.py"]
+        for f in files_to_copy:
+            src = source / f
+            if src.exists():
+                shutil.copy(src, super_mem_dir / f)
+                print(f"   ✅ {f}")
+        
+        # Install launcher
+        launcher_src = source / "daemon" / "launcher.py"
+        if launcher_src.exists():
+            shutil.copy(launcher_src, super_mem_dir / "launcher.py")
+            print("   ✅ launcher.py")
+    else:
+        print("   ✅ Files already in place")
+    
+    # Install systemd service (Linux)
+    if sys.platform == "linux":
+        systemd_dir = Path.home() / ".config" / "systemd" / "user"
+        systemd_dir.mkdir(parents=True, exist_ok=True)
+        
+        service_src = source / "daemon" / "super-memory.service"
+        if service_src.exists():
+            shutil.copy(service_src, systemd_dir / "super-memory.service")
+            print("   ✅ super-memory.service")
+            
+            # Reload and enable
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, 
+                          capture_output=True)
+            subprocess.run(["systemctl", "--user", "enable", "super-memory"], check=True,
+                          capture_output=True)
+            print("   ✅ systemd service enabled")
+    
+    # Add to PATH if needed
+    bin_dir = Path.home() / ".local" / "bin"
+    mem_path = bin_dir / "mem"
+    
+    if not mem_path.exists():
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        # Create wrapper
+        with open(mem_path, 'w') as f:
+            f.write(f"#!/bin/bash\nexec python3 {super_mem_dir}/mem \"$@\"\n")
+        os.chmod(mem_path, 0o755)
+        print(f"   ✅ Linked to ~/.local/bin/mem")
+    
+    print()
+    print("✅ Installation complete!")
+    print()
+    print("Next steps:")
+    print("  1. Restart terminal or source ~/.bashrc")
+    print("  2. Run: mem start")
+    print("  3. Run: mem add \"First entry\"")
+    print()
+    
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Super Memory CLI — Universal AI Memory',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    subparsers = parser.add_subparsers(dest='command', help='Commands')
+    
+    # add
+    p_add = subparsers.add_parser('add', help='Add entry')
+    p_add.add_argument('text', nargs='+', help='Entry text')
+    p_add.add_argument('-t', '--type', default='general', help='Entry type')
+    
+    # done
+    p_done = subparsers.add_parser('done', help='Mark task completed')
+    p_done.add_argument('task', nargs='+', help='Task description')
+    
+    # decision
+    p_dec = subparsers.add_parser('decision', help='Add decision')
+    p_dec.add_argument('topic', nargs='+', help='Decision topic')
+    p_dec.add_argument('-d', '--decision', help='Decision text')
+    p_dec.add_argument('-r', '--reason', help='Reason')
+    
+    # blocked
+    p_blk = subparsers.add_parser('blocked', help='Add blocker')
+    p_blk.add_argument('task', nargs='+', help='Blocked task')
+    p_blk.add_argument('-b', '--blocker', help='What is blocking')
+    p_blk.add_argument('-n', '--needed', help='What is needed')
+    
+    # search
+    p_search = subparsers.add_parser('search', help='Search')
+    p_search.add_argument('query', nargs='+', help='Search query')
+    
+    # recent
+    p_recent = subparsers.add_parser('recent', help='Recent entries')
+    p_recent.add_argument('-n', '--limit', type=int, default=10, help='Limit')
+    
+    # summary
+    subparsers.add_parser('summary', help='Memory summary')
+    
+    # context
+    subparsers.add_parser('context', help='AI context')
+    
+    # status
+    subparsers.add_parser('status', help='Check agent status')
+    
+    # start/stop
+    subparsers.add_parser('start', help='Start agent')
+    subparsers.add_parser('stop', help='Stop agent')
+    subparsers.add_parser('install', help='Install agent')
+    
+    # help
+    subparsers.add_parser('help', help='Show help')
+    
+    args = parser.parse_args()
+    
+    # Default to status if no command
+    if not args.command:
+        args.command = 'status'
+    
+    # Dispatch
+    commands = {
+        'add': cmd_add,
+        'done': cmd_done,
+        'decision': cmd_decision,
+        'blocked': cmd_blocked,
+        'search': cmd_search,
+        'recent': cmd_recent,
+        'summary': cmd_summary,
+        'context': cmd_context,
+        'status': cmd_status,
+        'start': cmd_start,
+        'stop': cmd_stop,
+        'install': cmd_install,
+        'help': lambda a: parser.print_help()
+    }
+    
+    cmd = commands.get(args.command)
+    if cmd:
+        sys.exit(cmd(args) or 0)
+    else:
+        parser.print_help()
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
