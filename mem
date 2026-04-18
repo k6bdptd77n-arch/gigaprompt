@@ -249,6 +249,33 @@ def cmd_context(args):
     return 0
 
 
+def cmd_tokens(args):
+    """Show token usage summary."""
+    result = api_get("/tokens/summary")
+
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+
+    print("📊 Token Usage Summary")
+    print("=" * 40)
+    print(f"  Total Requests:  {result.get('total_requests', 0)}")
+    print(f"  Input Tokens:    {result.get('total_input_tokens', 0):,}")
+    print(f"  Output Tokens:   {result.get('total_output_tokens', 0):,}")
+    print(f"  Estimated Cost:  ${result.get('total_cost_usd', 0):.4f}")
+    print(f"  Cache Savings:    ${result.get('total_cache_savings_usd', 0):.2f}")
+    models = result.get("models_used", [])
+    if models:
+        print(f"  Models:          {', '.join(models)}")
+    daily = result.get("daily_costs", {})
+    if daily:
+        print("\n  Daily Costs:")
+        for day, cost in sorted(daily.items()):
+            print(f"    {day}: ${cost:.4f}")
+
+    return 0
+
+
 def cmd_status(args):
     """Check agent status."""
     if is_agent_running():
@@ -444,7 +471,10 @@ def main():
     
     # context
     subparsers.add_parser('context', help='AI context')
-    
+
+    # tokens
+    subparsers.add_parser('tokens', help='Token usage summary')
+
     # status
     subparsers.add_parser('status', help='Check agent status')
     
@@ -472,6 +502,7 @@ def main():
         'recent': cmd_recent,
         'summary': cmd_summary,
         'context': cmd_context,
+        'tokens': cmd_tokens,
         'status': cmd_status,
         'start': cmd_start,
         'stop': cmd_stop,

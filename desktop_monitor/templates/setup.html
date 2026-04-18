@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How It Works — Super Memory</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
+      --text: #e0e0e0; --muted: #888; --blue: #3b82f6;
+      --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+    header { background: var(--card); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; align-items: center; height: 56px; }
+    .logo { font-size: 16px; font-weight: 700; color: #fff; }
+    .logo span { color: var(--blue); }
+    nav { display: flex; margin-left: 32px; gap: 4px; }
+    nav a { padding: 8px 16px; color: var(--muted); text-decoration: none; font-size: 14px; border-radius: 6px; transition: all 0.15s; }
+    nav a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+    nav a.active { color: var(--text); background: rgba(255,255,255,0.05); }
+
+    main { padding: 32px 24px; max-width: 900px; margin: 0 auto; }
+
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+    h2 { font-size: 16px; font-weight: 600; color: var(--blue); margin: 28px 0 12px; text-transform: uppercase; letter-spacing: 0.05em; font-size: 12px; }
+    p { font-size: 14px; line-height: 1.65; color: var(--text); margin-bottom: 12px; }
+
+    .section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin-bottom: 16px; }
+
+    .cmd {
+      background: #141621;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 16px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 13px;
+      color: #e0e0e0;
+      margin: 8px 0;
+      overflow-x: auto;
+      white-space: pre;
+    }
+    .cmd .c { color: var(--green); }     /* comment green */
+    .cmd .k { color: var(--amber); }     /* keyword amber */
+    .cmd .s { color: #93c5fd; }          /* string blue */
+
+    .note { background: rgba(59,130,246,0.08); border-left: 3px solid var(--blue); border-radius: 0 6px 6px 0; padding: 10px 14px; font-size: 13px; color: var(--muted); margin: 12px 0; }
+
+    .flow { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
+    .flow-step { display: flex; gap: 12px; align-items: flex-start; }
+    .flow-num { width: 24px; height: 24px; border-radius: 50%; background: var(--blue); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .flow-text { font-size: 13px; line-height: 1.5; padding-top: 3px; }
+    .flow-text strong { color: #fff; }
+
+    .endpoint { display: flex; gap: 8px; align-items: baseline; margin: 6px 0; font-size: 13px; }
+    .method { font-family: monospace; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; }
+    .method-get { background: rgba(34,197,94,0.15); color: var(--green); }
+    .method-post { background: rgba(59,130,246,0.15); color: var(--blue); }
+    .ep-path { font-family: monospace; color: var(--text); }
+
+    table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+    th { text-align: left; padding: 8px 12px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
+    td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+    code { font-family: monospace; font-size: 12px; background: #141621; padding: 2px 6px; border-radius: 4px; color: var(--amber); }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Super <span>Memory</span></div>
+  <nav>
+    <a href="/">Monitor</a>
+    <a href="/setup" class="active">How It Works</a>
+  </nav>
+</header>
+
+<main>
+
+<div class="section">
+  <h1>How It Works</h1>
+  <p>Super Memory is a lightweight, universal memory service for AI agents. It stores your decisions, completed tasks, blockers, and learnings — so any AI tool can query context across sessions.</p>
+
+  <h2>Architecture</h2>
+  <div class="flow">
+    <div class="flow-step">
+      <div class="flow-num">1</div>
+      <div class="flow-text"><strong>You</strong> add entries via CLI (<code>mem add</code>, <code>mem done</code>, <code>mem decision</code>)</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">2</div>
+      <div class="flow-text"><strong>CLI</strong> sends HTTP POST to the <strong>Memory Agent</strong> running on <code>localhost:8080</code></div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">3</div>
+      <div class="flow-text"><strong>Memory Agent</strong> (Python HTTP server) writes to <code>memory.db</code> (SQLite)</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">4</div>
+      <div class="flow-text"><strong>AI Agent</strong> (Claude Code, Cursor, etc.) queries <code>/context</code> endpoint to get relevant memory</div>
+    </div>
+    <div class="flow-step">
+      <div class="flow-num">5</div>
+      <div class="flow-text"><strong>Token Logger</strong> captures API usage and saves to <code>token_log.jsonl</code></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>CLI Commands</h2>
+  <div class="cmd"><span class="c"># Add a general entry</span>
+<span class="k">mem</span> add <span class="s">"Fixed the auth bug in login flow"</span>
+
+<span class="c"># Mark task completed</span>
+<span class="k">mem</span> done <span class="s">"Set up CI pipeline"</span>
+
+<span class="c"># Record a decision</span>
+<span class="k">mem</span> decision <span class="s">"Use PostgreSQL instead of MongoDB"</span> -r <span class="s">"Better for our relational data"</span>
+
+<span class="c"># Add a blocker</span>
+<span class="k">mem</span> blocked <span class="s">"API integration"</span> -b <span class="s">"Waiting on third-party API key"</span> -n <span class="s">"Vendor credentials"</span>
+
+<span class="c"># Search memory</span>
+<span class="k">mem</span> search <span class="s">"authentication"</span>
+
+<span class="c"># Get AI context (for prompt injection)</span>
+<span class="k">mem</span> context
+
+<span class="c"># Token usage summary</span>
+<span class="k">mem</span> tokens</div>
+</div>
+
+<div class="section">
+  <h2>API Endpoints</h2>
+
+  <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/health</span> — Agent health check</div>
+  <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/summary</span> — Memory counts by type</div>
+  <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/recent</span> — Last 10 memory entries</div>
+  <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/search?q=query</span> — Search entries</div>
+  <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/context</span> — AI-formatted context</div>
+  <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/tokens/summary</span> — Token usage aggregation</div>
+  <div class="endpoint"><span class="method method-get">GET</span><span class="ep-path">/tokens/daily</span> — Daily cost breakdown</div>
+  <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/add</span> — Add entry</div>
+  <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/add_completed</span> — Mark task completed</div>
+  <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/add_decision</span> — Record decision</div>
+  <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/add_blocker</span> — Add blocker</div>
+  <div class="endpoint"><span class="method method-post">POST</span><span class="ep-path">/log_tokens</span> — Log token usage</div>
+</div>
+
+<div class="section">
+  <h2>File Structure</h2>
+  <table>
+    <tr><th>File</th><th>Description</th></tr>
+    <tr><td><code>memory_agent.py</code></td><td>REST API сервер (port 8080)</td></tr>
+    <tr><td><code>mem</code></td><td>CLI утилита (no .py)</td></tr>
+    <tr><td><code>token_log.py</code></td><td>API wrapper для авто-логирования токенов</td></tr>
+    <tr><td><code>memory.db</code></td><td>SQLite база данных</td></tr>
+    <tr><td><code>token_log.jsonl</code></td><td>Лог token usage (JSONL)</td></tr>
+    <tr><td><code>hook.sh</code></td><td>Bash hook (auto-capture git commits)</td></tr>
+    <tr><td><code>context_inject.py</code></td><td>Prompt injector для AI</td></tr>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Token Logging</h2>
+  <p>Чтобы автоматически логировать расход токенов из любого API клиента, используй <code>token_log.py</code> как обёртку:</p>
+
+  <div class="cmd"><span class="c"># Wrap any curl call</span>
+<span class="k">SUPER_MEMORY_API=</span><span class="s">http://127.0.0.1:8080</span> \
+<span class="k">ANTHROPIC_API_KEY=</span><span class="s">sk-ant-...</span> \
+python token_log.py curl <span class="k">-X POST</span> https://api.anthropic.com/v1/messages \
+  <span class="k">-H</span> <span class="s">"x-api-key: $ANTHROPIC_API_KEY"</span> \
+  <span class="k">-H</span> <span class="s">"anthropic-version: 2023-06-01"</span> \
+  <span class="k">-d</span> <span class="s">'{"model":"claude-opus-4-6","max_tokens":1024,"messages":[{"role":"user","content":"Hi"}]}'</span></div>
+
+  <p>Или через API напрямую:</p>
+  <div class="cmd">curl <span class="k">-X POST</span> http://127.0.0.1:8080/log_tokens \
+  <span class="k">-H</span> <span class="s">"Content-Type: application/json"</span> \
+  <span class="k">-d</span> <span class="s">'{"model":"claude-opus-4-6","usage":{"input_tokens":50000,"output_tokens":25000},"source":"test"}'</span></div>
+
+  <div class="note">Цены (Anthropic API, $/1M токенов): Opus 4.6 = $5/$25 &nbsp;|&nbsp; Sonnet 4.6 = $3/$15 &nbsp;|&nbsp; Haiku 4.5 = $1/$5</div>
+</div>
+
+<div class="section">
+  <h2>Running the Desktop Monitor</h2>
+  <div class="cmd"><span class="c"># Install dependencies</span>
+pip install pywebview flask requests
+
+<span class="c"># Run the desktop app</span>
+python desktop_monitor/app.py</div>
+</div>
+
+</main>
+
+<script>
+  // Highlight nav
+  document.querySelectorAll('nav a').forEach(a => {
+    if (a.getAttribute('href') === window.location.pathname) a.classList.add('active');
+  });
+</script>
+</body>
+</html>

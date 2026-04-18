@@ -1,0 +1,4 @@
+memory.db
+token_log.jsonl
+__pycache__/
+*.pyc
