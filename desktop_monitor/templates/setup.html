@@ -7,67 +7,90 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --bg: #0f1117; --card: #1a1d27; --border: #2a2d3a;
-      --text: #e0e0e0; --muted: #888; --blue: #3b82f6;
-      --green: #22c55e; --amber: #f59e0b; --red: #ef4444;
+      --bg: #0c0b09; --surface: #141311; --card: #1c1a16; --card-hover: #242118;
+      --border: #2e2b24; --border-bright: #3d3930;
+      --text: #e8e0d0; --text-dim: #7a7265; --text-muted: #4a4538;
+      --amber: #e8a84c; --amber-dim: rgba(232,168,76,0.10); --amber-glow: rgba(232,168,76,0.25);
+      --green: #7ec88a; --green-dim: rgba(126,200,138,0.10);
+      --red: #e88080; --red-dim: rgba(232,128,128,0.10);
+      --cyan: #80c8e8; --cyan-dim: rgba(128,200,232,0.10);
+      --purple: #b080e8; --purple-dim: rgba(176,128,232,0.10);
+      --font: 'IBM Plex Sans', -apple-system, sans-serif;
+      --display: 'Syne', sans-serif;
+      --mono: 'IBM Plex Mono', monospace;
     }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
-    header { background: var(--card); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; align-items: center; height: 56px; }
-    .logo { font-size: 16px; font-weight: 700; color: #fff; }
-    .logo span { color: var(--blue); }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    header {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 0 24px; display: flex; align-items: center; height: 56px;
+      backdrop-filter: blur(12px);
+    }
+    .logo { font-family: var(--display); font-size: 17px; font-weight: 800; color: var(--amber); letter-spacing: -0.5px; }
+    .logo em { font-style: normal; color: var(--text); }
     nav { display: flex; margin-left: 32px; gap: 4px; }
-    nav a { padding: 8px 16px; color: var(--muted); text-decoration: none; font-size: 14px; border-radius: 6px; transition: all 0.15s; }
-    nav a:hover { color: var(--text); background: rgba(255,255,255,0.05); }
-    nav a.active { color: var(--text); background: rgba(255,255,255,0.05); }
+    nav a { padding: 8px 16px; color: var(--text-dim); text-decoration: none; font-size: 13.5px; border-radius: 7px; transition: all 0.15s; }
+    nav a:hover { color: var(--text); background: rgba(232,168,76,0.05); }
+    nav a.active { color: var(--amber); background: var(--amber-dim); }
 
     main { padding: 32px 24px; max-width: 900px; margin: 0 auto; }
 
-    h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
-    h2 { font-size: 16px; font-weight: 600; color: var(--blue); margin: 28px 0 12px; text-transform: uppercase; letter-spacing: 0.05em; font-size: 12px; }
-    p { font-size: 14px; line-height: 1.65; color: var(--text); margin-bottom: 12px; }
+    h1 { font-family: var(--display); font-size: 26px; font-weight: 800; color: var(--text); margin-bottom: 10px; letter-spacing: -0.5px; }
+    h2 {
+      font-size: 10.5px; font-weight: 600; color: var(--amber);
+      margin: 28px 0 12px; text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    p { font-size: 14px; line-height: 1.75; color: var(--text); margin-bottom: 12px; }
 
-    .section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 24px; margin-bottom: 16px; }
+    .section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 22px; margin-bottom: 16px; }
 
     .cmd {
-      background: #141621;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px 16px;
-      font-family: 'SF Mono', 'Fira Code', monospace;
-      font-size: 13px;
-      color: #e0e0e0;
-      margin: 8px 0;
-      overflow-x: auto;
-      white-space: pre;
+      background: #080704; border: 1px solid var(--border);
+      border-radius: 7px; padding: 12px 16px;
+      font-family: var(--mono); font-size: 13px; color: var(--text);
+      margin: 8px 0; overflow-x: auto; white-space: pre-wrap;
     }
-    .cmd .c { color: var(--green); }     /* comment green */
-    .cmd .k { color: var(--amber); }     /* keyword amber */
-    .cmd .s { color: #93c5fd; }          /* string blue */
+    .cmd .c { color: var(--green); }
+    .cmd .k { color: var(--amber); }
+    .cmd .s { color: var(--cyan); }
 
-    .note { background: rgba(59,130,246,0.08); border-left: 3px solid var(--blue); border-radius: 0 6px 6px 0; padding: 10px 14px; font-size: 13px; color: var(--muted); margin: 12px 0; }
+    .note {
+      background: var(--amber-dim); border-left: 3px solid var(--amber);
+      border-radius: 0 7px 7px 0; padding: 10px 14px;
+      font-size: 13px; color: var(--text-dim); margin: 12px 0;
+    }
 
-    .flow { display: flex; flex-direction: column; gap: 8px; margin: 16px 0; }
+    .flow { display: flex; flex-direction: column; gap: 10px; margin: 16px 0; }
     .flow-step { display: flex; gap: 12px; align-items: flex-start; }
-    .flow-num { width: 24px; height: 24px; border-radius: 50%; background: var(--blue); color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .flow-text { font-size: 13px; line-height: 1.5; padding-top: 3px; }
-    .flow-text strong { color: #fff; }
+    .flow-num {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: var(--amber); color: #0c0b09;
+      font-size: 12px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .flow-text { font-size: 13.5px; line-height: 1.5; padding-top: 3px; }
+    .flow-text strong { color: var(--text); }
 
     .endpoint { display: flex; gap: 8px; align-items: baseline; margin: 6px 0; font-size: 13px; }
-    .method { font-family: monospace; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; }
-    .method-get { background: rgba(34,197,94,0.15); color: var(--green); }
-    .method-post { background: rgba(59,130,246,0.15); color: var(--blue); }
-    .ep-path { font-family: monospace; color: var(--text); }
+    .method { font-family: var(--mono); font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 4px; }
+    .method-get { background: var(--green-dim); color: var(--green); }
+    .method-post { background: var(--amber-dim); color: var(--amber); }
+    .ep-path { font-family: var(--mono); color: var(--text); }
 
     table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-    th { text-align: left; padding: 8px 12px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); }
-    td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.04); }
-    code { font-family: monospace; font-size: 12px; background: #141621; padding: 2px 6px; border-radius: 4px; color: var(--amber); }
+    th {
+      text-align: left; padding: 9px 13px; font-size: 10.5px;
+      color: var(--text-dim); text-transform: uppercase;
+      letter-spacing: 0.05em; border-bottom: 1px solid var(--border);
+    }
+    td { padding: 9px 13px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.03); }
+    code { font-family: var(--mono); font-size: 12px; background: #080704; padding: 2px 7px; border-radius: 4px; color: var(--amber); }
   </style>
 </head>
 <body>
 
 <header>
-  <div class="logo">Super <span>Memory</span></div>
+  <div class="logo">Super<em>Memory</em></div>
   <nav>
     <a href="/">Monitor</a>
     <a href="/setup" class="active">How It Works</a>
@@ -150,19 +173,19 @@
   <h2>File Structure</h2>
   <table>
     <tr><th>File</th><th>Description</th></tr>
-    <tr><td><code>memory_agent.py</code></td><td>REST API сервер (port 8080)</td></tr>
-    <tr><td><code>mem</code></td><td>CLI утилита (no .py)</td></tr>
-    <tr><td><code>token_log.py</code></td><td>API wrapper для авто-логирования токенов</td></tr>
-    <tr><td><code>memory.db</code></td><td>SQLite база данных</td></tr>
-    <tr><td><code>token_log.jsonl</code></td><td>Лог token usage (JSONL)</td></tr>
+    <tr><td><code>memory_agent.py</code></td><td>REST API server (port 8080)</td></tr>
+    <tr><td><code>mem</code></td><td>CLI utility (no .py)</td></tr>
+    <tr><td><code>token_log.py</code></td><td>API wrapper for auto token logging</td></tr>
+    <tr><td><code>memory.db</code></td><td>SQLite database</td></tr>
+    <tr><td><code>token_log.jsonl</code></td><td>Token usage log (JSONL)</td></tr>
     <tr><td><code>hook.sh</code></td><td>Bash hook (auto-capture git commits)</td></tr>
-    <tr><td><code>context_inject.py</code></td><td>Prompt injector для AI</td></tr>
+    <tr><td><code>context_inject.py</code></td><td>Prompt injector for AI</td></tr>
   </table>
 </div>
 
 <div class="section">
   <h2>Token Logging</h2>
-  <p>Чтобы автоматически логировать расход токенов из любого API клиента, используй <code>token_log.py</code> как обёртку:</p>
+  <p>To automatically log token usage from any API client, use <code>token_log.py</code> as a wrapper:</p>
 
   <div class="cmd"><span class="c"># Wrap any curl call</span>
 <span class="k">SUPER_MEMORY_API=</span><span class="s">http://127.0.0.1:8080</span> \
@@ -172,12 +195,12 @@ python token_log.py curl <span class="k">-X POST</span> https://api.anthropic.co
   <span class="k">-H</span> <span class="s">"anthropic-version: 2023-06-01"</span> \
   <span class="k">-d</span> <span class="s">'{"model":"claude-opus-4-6","max_tokens":1024,"messages":[{"role":"user","content":"Hi"}]}'</span></div>
 
-  <p>Или через API напрямую:</p>
+  <p>Or via API directly:</p>
   <div class="cmd">curl <span class="k">-X POST</span> http://127.0.0.1:8080/log_tokens \
   <span class="k">-H</span> <span class="s">"Content-Type: application/json"</span> \
   <span class="k">-d</span> <span class="s">'{"model":"claude-opus-4-6","usage":{"input_tokens":50000,"output_tokens":25000},"source":"test"}'</span></div>
 
-  <div class="note">Цены (Anthropic API, $/1M токенов): Opus 4.6 = $5/$25 &nbsp;|&nbsp; Sonnet 4.6 = $3/$15 &nbsp;|&nbsp; Haiku 4.5 = $1/$5</div>
+  <div class="note">Pricing (Anthropic API, $/1M tokens): Opus 4.6 = $5/$25 &nbsp;|&nbsp; Sonnet 4.6 = $3/$15 &nbsp;|&nbsp; Haiku 4.5 = $1/$5</div>
 </div>
 
 <div class="section">
@@ -192,7 +215,6 @@ python desktop_monitor/app.py</div>
 </main>
 
 <script>
-  // Highlight nav
   document.querySelectorAll('nav a').forEach(a => {
     if (a.getAttribute('href') === window.location.pathname) a.classList.add('active');
   });

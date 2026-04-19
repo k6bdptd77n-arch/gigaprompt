@@ -2,7 +2,7 @@
 """
 Super Memory CLI
 ================
-Standalone CLI for Super Memory — works WITHOUT bash hooks.
+Standalone CLI for Super Memory -- works WITHOUT bash hooks.
 
 Usage:
     mem add "text"           Add entry
@@ -31,6 +31,17 @@ from pathlib import Path
 # Config
 API_HOST = os.environ.get('SUPER_MEMORY_API', 'http://127.0.0.1:8080')
 AGENT_PATH = Path.home() / ".super_memory" / "memory_agent.py"
+
+def safe_print(text):
+    """Print with ASCII fallback for Windows."""
+    import sys
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode('ascii', 'replace').decode('ascii'), file=sys.stdout)
+
+
+
 
 
 def api_get(endpoint: str) -> dict:
@@ -81,8 +92,8 @@ def cmd_add(args):
     """Add entry."""
     text = ' '.join(args.text) if args.text else ""
     if not text:
-        print("❌ Error: text required")
-        print("   Usage: mem add \"some text\"")
+        safe_print("[X] Error: text required")
+        safe_print("   Usage: mem add \"some text\"")
         return 1
     
     result = api_post("/add", {
@@ -92,10 +103,10 @@ def cmd_add(args):
     })
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
-    print(f"✅ Added: {text[:50]}...")
+    safe_print(f"[OK] Added: {text[:50]}...")
     return 0
 
 
@@ -103,8 +114,8 @@ def cmd_done(args):
     """Mark task completed."""
     task = ' '.join(args.task) if args.task else ""
     if not task:
-        print("❌ Error: task required")
-        print("   Usage: mem done \"implemented auth\"")
+        safe_print("[X] Error: task required")
+        safe_print("   Usage: mem done \"implemented auth\"")
         return 1
     
     result = api_post("/add_completed", {
@@ -113,10 +124,10 @@ def cmd_done(args):
     })
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
-    print(f"✅ Completed: {task[:50]}...")
+    safe_print(f"[OK] Completed: {task[:50]}...")
     return 0
 
 
@@ -127,8 +138,8 @@ def cmd_decision(args):
     reason = args.reason or ""
     
     if not topic:
-        print("❌ Error: topic required")
-        print("   Usage: mem decision \"Use Postgres\" --reason \"Better performance\"")
+        safe_print("[X] Error: topic required")
+        safe_print("   Usage: mem decision \"Use Postgres\" --reason \"Better performance\"")
         return 1
     
     result = api_post("/add_decision", {
@@ -139,10 +150,10 @@ def cmd_decision(args):
     })
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
-    print(f"⚖️ Decision added: {topic[:50]}...")
+    safe_print(f"[=]️ Decision added: {topic[:50]}...")
     return 0
 
 
@@ -153,8 +164,8 @@ def cmd_blocked(args):
     needed = args.needed or "TBD"
     
     if not task:
-        print("❌ Error: task required")
-        print("   Usage: mem blocked \"API integration\" --blocker \"Waiting for spec\"")
+        safe_print("[X] Error: task required")
+        safe_print("   Usage: mem blocked \"API integration\" --blocker \"Waiting for spec\"")
         return 1
     
     result = api_post("/add_blocker", {
@@ -165,10 +176,10 @@ def cmd_blocked(args):
     })
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
-    print(f"🚧 Blocker added: {task[:50]}...")
+    safe_print(f"[!] Blocker added: {task[:50]}...")
     return 0
 
 
@@ -176,26 +187,26 @@ def cmd_search(args):
     """Search memories."""
     query = ' '.join(args.query) if args.query else ""
     if not query:
-        print("❌ Error: query required")
-        print("   Usage: mem search \"auth\"")
+        safe_print("[X] Error: query required")
+        safe_print("   Usage: mem search \"auth\"")
         return 1
     
     result = api_get(f"/search?q={query}")
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
     results = result.get("results", [])
     
     if not results:
-        print(f"No results for: {query}")
+        safe_print(f"No results for: {query}")
         return 0
     
-    print(f"Found {len(results)} results:\n")
+    safe_print(f"Found {len(results)} results:\n")
     for r in results[:10]:
-        print(f"[{r.get('type', '?')}] {r.get('text', '')[:80]}")
-        print()
+        safe_print(f"[{r.get('type', '?')}] {r.get('text', '')[:80]}")
+        pass
     
     return 0
 
@@ -205,18 +216,18 @@ def cmd_recent(args):
     result = api_get("/recent")
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
     memories = result.get("memories", [])
     
     if not memories:
-        print("No entries yet")
+        safe_print("No entries yet")
         return 0
     
     limit = args.limit or 10
     for m in memories[:limit]:
-        print(f"[{m.get('type', '?')}] {m.get('text', '')[:80]}")
+        safe_print(f"[{m.get('type', '?')}] {m.get('text', '')[:80]}")
     
     return 0
 
@@ -226,18 +237,18 @@ def cmd_summary(args):
     result = api_get("/summary")
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
-    print()
-    print("📊 Memory Summary")
-    print("=" * 40)
-    print(f"  Total:     {result.get('total', 0)}")
-    print(f"  Completed: {result.get('completed', 0)}")
-    print(f"  Decisions: {result.get('decisions', 0)}")
-    print(f"  Blockers:  {result.get('blockers', 0)}")
-    print(f"  Learnings: {result.get('learnings', 0)}")
-    print()
+    pass
+    safe_print("[S] Memory Summary")
+    safe_print("=" * 40)
+    safe_print(f"  Total:     {result.get('total', 0)}")
+    safe_print(f"  Completed: {result.get('completed', 0)}")
+    safe_print(f"  Decisions: {result.get('decisions', 0)}")
+    safe_print(f"  Blockers:  {result.get('blockers', 0)}")
+    safe_print(f"  Learnings: {result.get('learnings', 0)}")
+    pass
     
     return 0
 
@@ -247,11 +258,11 @@ def cmd_context(args):
     result = api_get("/context")
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
     context = result.get("context", "")
-    print(context or "No context available")
+    safe_print(context or "No context available")
     
     return 0
 
@@ -261,24 +272,24 @@ def cmd_tokens(args):
     result = api_get("/tokens/summary")
 
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
 
-    print("📊 Token Usage Summary")
-    print("=" * 40)
-    print(f"  Total Requests:  {result.get('total_requests', 0)}")
-    print(f"  Input Tokens:    {result.get('total_input_tokens', 0):,}")
-    print(f"  Output Tokens:   {result.get('total_output_tokens', 0):,}")
-    print(f"  Estimated Cost:  ${result.get('total_cost_usd', 0):.4f}")
-    print(f"  Cache Savings:    ${result.get('total_cache_savings_usd', 0):.2f}")
+    safe_print("[S] Token Usage Summary")
+    safe_print("=" * 40)
+    safe_print(f"  Total Requests:  {result.get('total_requests', 0)}")
+    safe_print(f"  Input Tokens:    {result.get('total_input_tokens', 0):,}")
+    safe_print(f"  Output Tokens:   {result.get('total_output_tokens', 0):,}")
+    safe_print(f"  Estimated Cost:  ${result.get('total_cost_usd', 0):.4f}")
+    safe_print(f"  Cache Savings:    ${result.get('total_cache_savings_usd', 0):.2f}")
     models = result.get("models_used", [])
     if models:
-        print(f"  Models:          {', '.join(models)}")
+        safe_print(f"  Models:          {', '.join(models)}")
     daily = result.get("daily_costs", {})
     if daily:
-        print("\n  Daily Costs:")
+        safe_print("\n  Daily Costs:")
         for day, cost in sorted(daily.items()):
-            print(f"    {day}: ${cost:.4f}")
+            safe_print(f"    {day}: ${cost:.4f}")
 
     return 0
 
@@ -286,14 +297,14 @@ def cmd_tokens(args):
 def cmd_status(args):
     """Check agent status."""
     if is_agent_running():
-        print("✅ Super Memory running")
+        safe_print("[OK] Super Memory running")
         
         result = api_get("/summary")
         if "error" not in result:
-            print(f"   Entries: {result.get('total', '?')}")
+            safe_print(f"   Entries: {result.get('total', '?')}")
     else:
-        print("❌ Super Memory not running")
-        print(f"   Start: mem start")
+        safe_print("[X] Super Memory not running")
+        safe_print(f"   Start: mem start")
         return 1
     
     return 0
@@ -302,11 +313,11 @@ def cmd_status(args):
 def cmd_start(args):
     """Start the agent."""
     if is_agent_running():
-        print("✅ Already running")
+        safe_print("[OK] Already running")
         return 0
     
     if not AGENT_PATH.exists():
-        print(f"❌ Agent not found: {AGENT_PATH}")
+        safe_print(f"[X] Agent not found: {AGENT_PATH}")
         return 1
     
     import subprocess
@@ -325,17 +336,17 @@ def cmd_start(args):
     for i in range(10):
         time.sleep(0.5)
         if is_agent_running():
-            print(f"✅ Started (PID: {proc.pid})")
+            safe_print(f"[OK] Started (PID: {proc.pid})")
             return 0
     
-    print("⚠️  Started but not responding yet")
+    safe_print("⚠️  Started but not responding yet")
     return 0
 
 
 def cmd_stop(args):
     """Stop the agent."""
     if not is_agent_running():
-        print("Not running")
+        safe_print("Not running")
         return 0
     
     import subprocess
@@ -348,9 +359,9 @@ def cmd_stop(args):
         for pid in pids:
             if pid:
                 os.kill(int(pid), 9)
-        print("✅ Stopped")
+        safe_print("[OK] Stopped")
     except:
-        print("⚠️  Could not stop")
+        safe_print("⚠️  Could not stop")
         return 1
     
     return 0
@@ -358,7 +369,7 @@ def cmd_stop(args):
 
 def cmd_install(args):
     """Install agent and enable auto-start."""
-    print("🔧 Installing Super Memory...")
+    safe_print("🔧 Installing Super Memory...")
     
     super_mem_dir = Path.home() / ".super_memory"
     super_mem_dir.mkdir(exist_ok=True)
@@ -372,16 +383,16 @@ def cmd_install(args):
             src = source / f
             if src.exists():
                 shutil.copy(src, super_mem_dir / f)
-                print(f"   ✅ {f}")
+                safe_print(f"   [OK] {f}")
     
-    print()
-    print("✅ Installation complete!")
-    print()
-    print("Next steps:")
-    print("  1. Restart terminal or source ~/.bashrc")
-    print("  2. Run: mem start")
-    print("  3. Run: mem add \"First entry\"")
-    print()
+    pass
+    safe_print("[OK] Installation complete!")
+    pass
+    safe_print("Next steps:")
+    safe_print("  1. Restart terminal or source ~/.bashrc")
+    safe_print("  2. Run: mem start")
+    safe_print("  3. Run: mem add \"First entry\"")
+    pass
     
     return 0
 
@@ -406,10 +417,10 @@ def cmd_file_add(args):
     })
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
-    print(f"✅ File added: {filepath}")
+    safe_print(f"[OK] File added: {filepath}")
     return 0
 
 
@@ -418,25 +429,25 @@ def cmd_file_list(args):
     result = api_get("/files/list")
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
     files = result.get('files', [])
     if not files:
-        print("No files tracked yet")
-        print("   Run: mem file_add /path/to/file.py --purpose \"What this does\"")
+        safe_print("No files tracked yet")
+        safe_print("   Run: mem file_add /path/to/file.py --purpose \"What this does\"")
         return 0
     
-    print(f"📁 Tracked files: {len(files)}")
+    safe_print(f"[F] Tracked files: {len(files)}")
     for f in files[:20]:
         ext = f.get('extension', '')
         purpose = f.get('purpose', '')[:50]
-        print(f"  [{ext}] {f.get('filepath', '')}")
+        safe_print(f"  [{ext}] {f.get('filepath', '')}")
         if purpose:
-            print(f"         → {purpose}")
+            safe_print(f"         → {purpose}")
     
     if len(files) > 20:
-        print(f"  ... and {len(files) - 20} more")
+        safe_print(f"  ... and {len(files) - 20} more")
     
     return 0
 
@@ -445,26 +456,26 @@ def cmd_file_search(args):
     """Search tracked files."""
     query = ' '.join(args.query) if args.query else ""
     if not query:
-        print("❌ Error: query required")
-        print("   Usage: mem file_search auth")
+        safe_print("[X] Error: query required")
+        safe_print("   Usage: mem file_search auth")
         return 1
     
     result = api_get(f"/files/search?q={query}")
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
     files = result.get('results', [])
     if not files:
-        print(f"No files found for: {query}")
+        safe_print(f"No files found for: {query}")
         return 0
     
-    print(f"Found {len(files)} files for '{query}':")
+    safe_print(f"Found {len(files)} files for '{query}':")
     for f in files:
-        print(f"  {f.get('filepath', '')}")
+        safe_print(f"  {f.get('filepath', '')}")
         if f.get('purpose'):
-            print(f"    → {f.get('purpose', '')[:60]}")
+            safe_print(f"    → {f.get('purpose', '')[:60]}")
     
     return 0
 
@@ -475,18 +486,18 @@ def cmd_file_info(args):
     result = api_get(f"/files/{filepath}/info")
     
     if "error" in result:
-        print(f"❌ Error: {result.get('error', 'Unknown')}")
+        safe_print(f"[X] Error: {result.get('error', 'Unknown')}")
         return 1
     
     f = result.get('file', {})
-    print(f"\n📄 File: {f.get('filepath', '')}")
-    print(f"   Purpose: {f.get('purpose', 'N/A')}")
-    print(f"   Description: {f.get('description', 'N/A')}")
+    safe_print(f"\n[F] File: {f.get('filepath', '')}")
+    safe_print(f"   Purpose: {f.get('purpose', 'N/A')}")
+    safe_print(f"   Description: {f.get('description', 'N/A')}")
     patterns = json.loads(f.get('patterns', '[]'))
-    print(f"   Patterns: {', '.join(patterns) if patterns else 'None'}")
+    safe_print(f"   Patterns: {', '.join(patterns) if patterns else 'None'}")
     decisions = json.loads(f.get('decisions', '[]'))
-    print(f"   Decisions: {', '.join(decisions) if decisions else 'None'}")
-    print(f"   Updated: {f.get('updated_at', 'N/A')}")
+    safe_print(f"   Decisions: {', '.join(decisions) if decisions else 'None'}")
+    safe_print(f"   Updated: {f.get('updated_at', 'N/A')}")
     
     return 0
 
@@ -497,36 +508,36 @@ def cmd_file_context(args):
     result = api_get(f"/file_context?path={filepath}")
     
     if "error" in result:
-        print(f"❌ Error: {result.get('error', 'Unknown')}")
+        safe_print(f"[X] Error: {result.get('error', 'Unknown')}")
         return 1
     
     file_info = result.get('file')
     folder_info = result.get('folder')
     memories = result.get('related_memories', [])
     
-    print(f"\n📋 Context for: {filepath}")
-    print("="*50)
+    safe_print(f"\n📋 Context for: {filepath}")
+    safe_print("="*50)
     
     if file_info:
-        print(f"\n📄 FILE:")
-        print(f"   Purpose: {file_info.get('purpose', 'N/A')}")
-        print(f"   Description: {file_info.get('description', 'N/A')}")
+        safe_print(f"\n[F] FILE:")
+        safe_print(f"   Purpose: {file_info.get('purpose', 'N/A')}")
+        safe_print(f"   Description: {file_info.get('description', 'N/A')}")
         patterns = json.loads(file_info.get('patterns', '[]'))
-        print(f"   Patterns: {', '.join(patterns) if patterns else 'None'}")
+        safe_print(f"   Patterns: {', '.join(patterns) if patterns else 'None'}")
     
     if folder_info:
-        print(f"\n📁 FOLDER: {folder_info.get('path', '')}")
-        print(f"   Purpose: {folder_info.get('purpose', 'N/A')}")
+        safe_print(f"\n[F] FOLDER: {folder_info.get('path', '')}")
+        safe_print(f"   Purpose: {folder_info.get('purpose', 'N/A')}")
         blockers = json.loads(folder_info.get('blockers', '[]'))
         if blockers:
-            print(f"   Blockers: {', '.join(blockers)}")
+            safe_print(f"   Blockers: {', '.join(blockers)}")
     
     if memories:
-        print(f"\n🧠 RELATED MEMORIES:")
+        safe_print(f"\n🧠 RELATED MEMORIES:")
         for m in memories[:3]:
-            print(f"   - {m.get('text', '')[:80]}")
+            safe_print(f"   - {m.get('text', '')[:80]}")
     
-    print()
+    pass
     return 0
 
 
@@ -545,10 +556,10 @@ def cmd_folder_add(args):
     })
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
-    print(f"✅ Folder added: {folder_path}")
+    safe_print(f"[OK] Folder added: {folder_path}")
     return 0
 
 
@@ -557,21 +568,21 @@ def cmd_folder_list(args):
     result = api_get("/folders/list")
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
     folders = result.get('folders', [])
     if not folders:
-        print("No folders tracked yet")
-        print("   Run: mem folder_add /path/to/folder --purpose \"What this is\"")
+        safe_print("No folders tracked yet")
+        safe_print("   Run: mem folder_add /path/to/folder --purpose \"What this is\"")
         return 0
     
-    print(f"📁 Tracked folders: {len(folders)}")
+    safe_print(f"[F] Tracked folders: {len(folders)}")
     for f in folders[:20]:
         purpose = f.get('purpose', '')[:50]
-        print(f"  {f.get('path', '')}")
+        safe_print(f"  {f.get('path', '')}")
         if purpose:
-            print(f"    → {purpose}")
+            safe_print(f"    → {purpose}")
     
     return 0
 
@@ -590,10 +601,10 @@ def cmd_project_add(args):
     })
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
-    print(f"✅ Project added: {name}")
+    safe_print(f"[OK] Project added: {name}")
     return 0
 
 
@@ -602,21 +613,21 @@ def cmd_project_list(args):
     result = api_get("/projects/list")
     
     if "error" in result:
-        print(f"❌ Error: {result['error']}")
+        safe_print(f"[X] Error: {result['error']}")
         return 1
     
     projects = result.get('projects', [])
     if not projects:
-        print("No projects tracked yet")
-        print("   Run: mem project_add my-project --root /path/to/project")
+        safe_print("No projects tracked yet")
+        safe_print("   Run: mem project_add my-project --root /path/to/project")
         return 0
     
-    print(f"📦 Projects: {len(projects)}")
+    safe_print(f"📦 Projects: {len(projects)}")
     for p in projects:
         arch = p.get('architecture', '')[:50]
-        print(f"  {p.get('name', '')}")
+        safe_print(f"  {p.get('name', '')}")
         if arch:
-            print(f"    → {arch}")
+            safe_print(f"    → {arch}")
     
     return 0
 
@@ -627,7 +638,7 @@ def cmd_project_list(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Super Memory CLI — Universal AI Memory',
+        description='Super Memory CLI -- Universal AI Memory',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     
