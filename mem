@@ -8,7 +8,7 @@ Usage:
     mem add "text"           Add entry
     mem done "task"         Mark task completed
     mem decision "topic"    Add decision
-    mem blocked "task"      Add blocker
+    mem blocked "task"     Add blocker
     mem search "query"      Search
     mem recent              Recent entries
     mem summary             Memory summary
@@ -16,6 +16,9 @@ Usage:
     mem status              Check agent
     mem start               Start agent
     mem stop                Stop agent
+    mem file_add            Add file to tracking
+    mem file_list           List tracked files
+    mem folder_add          Add folder to tracking
     mem help                Show help
 """
 
@@ -69,6 +72,10 @@ def is_agent_running() -> bool:
     result = api_get("/health")
     return "error" not in result
 
+
+# ============================================================
+# MEMORY COMMANDS
+# ============================================================
 
 def cmd_add(args):
     """Add entry."""
@@ -298,17 +305,8 @@ def cmd_start(args):
         print("✅ Already running")
         return 0
     
-    # Try launcher first
-    launcher_path = Path.home() / ".super_memory" / "launcher.py"
-    if launcher_path.exists():
-        import subprocess
-        result = subprocess.run([sys.executable, str(launcher_path), "start"])
-        return result.returncode
-    
-    # Direct start
     if not AGENT_PATH.exists():
         print(f"❌ Agent not found: {AGENT_PATH}")
-        print("   Run: mem install")
         return 1
     
     import subprocess
@@ -323,7 +321,6 @@ def cmd_start(args):
         start_new_session=True
     )
     
-    # Wait
     import time
     for i in range(10):
         time.sleep(0.5)
@@ -363,15 +360,12 @@ def cmd_install(args):
     """Install agent and enable auto-start."""
     print("🔧 Installing Super Memory...")
     
-    # Create directory
     super_mem_dir = Path.home() / ".super_memory"
     super_mem_dir.mkdir(exist_ok=True)
     
-    # Copy files (skip if same location)
     import shutil
     source = Path(__file__).parent
     
-    # If running from ~/.super_memory, files are already there
     if source.resolve() != super_mem_dir.resolve():
         files_to_copy = ["memory_agent.py", "hook.sh", "context_inject.py"]
         for f in files_to_copy:
@@ -379,43 +373,6 @@ def cmd_install(args):
             if src.exists():
                 shutil.copy(src, super_mem_dir / f)
                 print(f"   ✅ {f}")
-        
-        # Install launcher
-        launcher_src = source / "daemon" / "launcher.py"
-        if launcher_src.exists():
-            shutil.copy(launcher_src, super_mem_dir / "launcher.py")
-            print("   ✅ launcher.py")
-    else:
-        print("   ✅ Files already in place")
-    
-    # Install systemd service (Linux)
-    if sys.platform == "linux":
-        systemd_dir = Path.home() / ".config" / "systemd" / "user"
-        systemd_dir.mkdir(parents=True, exist_ok=True)
-        
-        service_src = source / "daemon" / "super-memory.service"
-        if service_src.exists():
-            shutil.copy(service_src, systemd_dir / "super-memory.service")
-            print("   ✅ super-memory.service")
-            
-            # Reload and enable
-            subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, 
-                          capture_output=True)
-            subprocess.run(["systemctl", "--user", "enable", "super-memory"], check=True,
-                          capture_output=True)
-            print("   ✅ systemd service enabled")
-    
-    # Add to PATH if needed
-    bin_dir = Path.home() / ".local" / "bin"
-    mem_path = bin_dir / "mem"
-    
-    if not mem_path.exists():
-        bin_dir.mkdir(parents=True, exist_ok=True)
-        # Create wrapper
-        with open(mem_path, 'w') as f:
-            f.write(f"#!/bin/bash\nexec python3 {super_mem_dir}/mem \"$@\"\n")
-        os.chmod(mem_path, 0o755)
-        print(f"   ✅ Linked to ~/.local/bin/mem")
     
     print()
     print("✅ Installation complete!")
@@ -429,6 +386,245 @@ def cmd_install(args):
     return 0
 
 
+# ============================================================
+# FILE MEMORY COMMANDS (MVP 8)
+# ============================================================
+
+def cmd_file_add(args):
+    """Add or update file info."""
+    filepath = args.filepath
+    purpose = args.purpose or ""
+    description = args.description or ""
+    patterns = args.patterns.split(',') if args.patterns else []
+    
+    result = api_post("/files/add", {
+        "filepath": filepath,
+        "purpose": purpose,
+        "description": description,
+        "patterns": patterns,
+        "decisions": []
+    })
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    print(f"✅ File added: {filepath}")
+    return 0
+
+
+def cmd_file_list(args):
+    """List all tracked files."""
+    result = api_get("/files/list")
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    files = result.get('files', [])
+    if not files:
+        print("No files tracked yet")
+        print("   Run: mem file_add /path/to/file.py --purpose \"What this does\"")
+        return 0
+    
+    print(f"📁 Tracked files: {len(files)}")
+    for f in files[:20]:
+        ext = f.get('extension', '')
+        purpose = f.get('purpose', '')[:50]
+        print(f"  [{ext}] {f.get('filepath', '')}")
+        if purpose:
+            print(f"         → {purpose}")
+    
+    if len(files) > 20:
+        print(f"  ... and {len(files) - 20} more")
+    
+    return 0
+
+
+def cmd_file_search(args):
+    """Search tracked files."""
+    query = ' '.join(args.query) if args.query else ""
+    if not query:
+        print("❌ Error: query required")
+        print("   Usage: mem file_search auth")
+        return 1
+    
+    result = api_get(f"/files/search?q={query}")
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    files = result.get('results', [])
+    if not files:
+        print(f"No files found for: {query}")
+        return 0
+    
+    print(f"Found {len(files)} files for '{query}':")
+    for f in files:
+        print(f"  {f.get('filepath', '')}")
+        if f.get('purpose'):
+            print(f"    → {f.get('purpose', '')[:60]}")
+    
+    return 0
+
+
+def cmd_file_info(args):
+    """Get info about a file."""
+    filepath = args.filepath
+    result = api_get(f"/files/{filepath}/info")
+    
+    if "error" in result:
+        print(f"❌ Error: {result.get('error', 'Unknown')}")
+        return 1
+    
+    f = result.get('file', {})
+    print(f"\n📄 File: {f.get('filepath', '')}")
+    print(f"   Purpose: {f.get('purpose', 'N/A')}")
+    print(f"   Description: {f.get('description', 'N/A')}")
+    patterns = json.loads(f.get('patterns', '[]'))
+    print(f"   Patterns: {', '.join(patterns) if patterns else 'None'}")
+    decisions = json.loads(f.get('decisions', '[]'))
+    print(f"   Decisions: {', '.join(decisions) if decisions else 'None'}")
+    print(f"   Updated: {f.get('updated_at', 'N/A')}")
+    
+    return 0
+
+
+def cmd_file_context(args):
+    """Get full context for a file (file + folder + related memories)."""
+    filepath = args.filepath
+    result = api_get(f"/file_context?path={filepath}")
+    
+    if "error" in result:
+        print(f"❌ Error: {result.get('error', 'Unknown')}")
+        return 1
+    
+    file_info = result.get('file')
+    folder_info = result.get('folder')
+    memories = result.get('related_memories', [])
+    
+    print(f"\n📋 Context for: {filepath}")
+    print("="*50)
+    
+    if file_info:
+        print(f"\n📄 FILE:")
+        print(f"   Purpose: {file_info.get('purpose', 'N/A')}")
+        print(f"   Description: {file_info.get('description', 'N/A')}")
+        patterns = json.loads(file_info.get('patterns', '[]'))
+        print(f"   Patterns: {', '.join(patterns) if patterns else 'None'}")
+    
+    if folder_info:
+        print(f"\n📁 FOLDER: {folder_info.get('path', '')}")
+        print(f"   Purpose: {folder_info.get('purpose', 'N/A')}")
+        blockers = json.loads(folder_info.get('blockers', '[]'))
+        if blockers:
+            print(f"   Blockers: {', '.join(blockers)}")
+    
+    if memories:
+        print(f"\n🧠 RELATED MEMORIES:")
+        for m in memories[:3]:
+            print(f"   - {m.get('text', '')[:80]}")
+    
+    print()
+    return 0
+
+
+def cmd_folder_add(args):
+    """Add or update folder info."""
+    folder_path = args.path
+    purpose = args.purpose or ""
+    description = args.description or ""
+    blockers = args.blockers.split(',') if args.blockers else []
+    
+    result = api_post("/folders/add", {
+        "path": folder_path,
+        "purpose": purpose,
+        "description": description,
+        "blockers": blockers
+    })
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    print(f"✅ Folder added: {folder_path}")
+    return 0
+
+
+def cmd_folder_list(args):
+    """List all tracked folders."""
+    result = api_get("/folders/list")
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    folders = result.get('folders', [])
+    if not folders:
+        print("No folders tracked yet")
+        print("   Run: mem folder_add /path/to/folder --purpose \"What this is\"")
+        return 0
+    
+    print(f"📁 Tracked folders: {len(folders)}")
+    for f in folders[:20]:
+        purpose = f.get('purpose', '')[:50]
+        print(f"  {f.get('path', '')}")
+        if purpose:
+            print(f"    → {purpose}")
+    
+    return 0
+
+
+def cmd_project_add(args):
+    """Add or update project."""
+    name = args.name
+    root_path = args.root_path or ""
+    architecture = args.architecture or ""
+    
+    result = api_post("/projects/add", {
+        "name": name,
+        "root_path": root_path,
+        "architecture": architecture,
+        "key_decisions": []
+    })
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    print(f"✅ Project added: {name}")
+    return 0
+
+
+def cmd_project_list(args):
+    """List all tracked projects."""
+    result = api_get("/projects/list")
+    
+    if "error" in result:
+        print(f"❌ Error: {result['error']}")
+        return 1
+    
+    projects = result.get('projects', [])
+    if not projects:
+        print("No projects tracked yet")
+        print("   Run: mem project_add my-project --root /path/to/project")
+        return 0
+    
+    print(f"📦 Projects: {len(projects)}")
+    for p in projects:
+        arch = p.get('architecture', '')[:50]
+        print(f"  {p.get('name', '')}")
+        if arch:
+            print(f"    → {arch}")
+    
+    return 0
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
     parser = argparse.ArgumentParser(
         description='Super Memory CLI — Universal AI Memory',
@@ -437,62 +633,80 @@ def main():
     
     subparsers = parser.add_subparsers(dest='command', help='Commands')
     
-    # add
+    # Memory commands
     p_add = subparsers.add_parser('add', help='Add entry')
     p_add.add_argument('text', nargs='+', help='Entry text')
     p_add.add_argument('-t', '--type', default='general', help='Entry type')
     
-    # done
     p_done = subparsers.add_parser('done', help='Mark task completed')
     p_done.add_argument('task', nargs='+', help='Task description')
     
-    # decision
     p_dec = subparsers.add_parser('decision', help='Add decision')
     p_dec.add_argument('topic', nargs='+', help='Decision topic')
     p_dec.add_argument('-d', '--decision', help='Decision text')
     p_dec.add_argument('-r', '--reason', help='Reason')
     
-    # blocked
     p_blk = subparsers.add_parser('blocked', help='Add blocker')
     p_blk.add_argument('task', nargs='+', help='Blocked task')
     p_blk.add_argument('-b', '--blocker', help='What is blocking')
     p_blk.add_argument('-n', '--needed', help='What is needed')
     
-    # search
     p_search = subparsers.add_parser('search', help='Search')
     p_search.add_argument('query', nargs='+', help='Search query')
     
-    # recent
     p_recent = subparsers.add_parser('recent', help='Recent entries')
     p_recent.add_argument('-n', '--limit', type=int, default=10, help='Limit')
     
-    # summary
     subparsers.add_parser('summary', help='Memory summary')
-    
-    # context
     subparsers.add_parser('context', help='AI context')
-
-    # tokens
     subparsers.add_parser('tokens', help='Token usage summary')
-
-    # status
-    subparsers.add_parser('status', help='Check agent status')
     
-    # start/stop
+    # Agent commands
+    subparsers.add_parser('status', help='Check agent status')
     subparsers.add_parser('start', help='Start agent')
     subparsers.add_parser('stop', help='Stop agent')
     subparsers.add_parser('install', help='Install agent')
     
-    # help
+    # File Memory commands (MVP 8)
+    p_file_add = subparsers.add_parser('file_add', help='Add/update file info')
+    p_file_add.add_argument('filepath', help='File path')
+    p_file_add.add_argument('--purpose', '-p', default='', help='Purpose of file')
+    p_file_add.add_argument('--description', '-d', default='', help='Description')
+    p_file_add.add_argument('--patterns', help='Comma-separated patterns')
+
+    p_file_list = subparsers.add_parser('file_list', help='List tracked files')
+
+    p_file_search = subparsers.add_parser('file_search', help='Search files')
+    p_file_search.add_argument('query', nargs='+', help='Search query')
+
+    p_file_info = subparsers.add_parser('file_info', help='Get file info')
+    p_file_info.add_argument('filepath', help='File path')
+
+    p_file_context = subparsers.add_parser('file_context', help='Full context for file')
+    p_file_context.add_argument('filepath', help='File path')
+
+    p_folder_add = subparsers.add_parser('folder_add', help='Add/update folder info')
+    p_folder_add.add_argument('path', help='Folder path')
+    p_folder_add.add_argument('--purpose', '-p', default='', help='Purpose')
+    p_folder_add.add_argument('--description', '-d', default='', help='Description')
+    p_folder_add.add_argument('--blockers', help='Comma-separated blockers')
+
+    p_folder_list = subparsers.add_parser('folder_list', help='List tracked folders')
+
+    p_project_add = subparsers.add_parser('project_add', help='Add/update project')
+    p_project_add.add_argument('name', help='Project name')
+    p_project_add.add_argument('--root', dest='root_path', default='', help='Root path')
+    p_project_add.add_argument('--architecture', '-a', default='', help='Architecture')
+
+    p_project_list = subparsers.add_parser('project_list', help='List projects')
+
     subparsers.add_parser('help', help='Show help')
     
     args = parser.parse_args()
     
-    # Default to status if no command
     if not args.command:
         args.command = 'status'
     
-    # Dispatch
     commands = {
         'add': cmd_add,
         'done': cmd_done,
@@ -507,6 +721,15 @@ def main():
         'start': cmd_start,
         'stop': cmd_stop,
         'install': cmd_install,
+        'file_add': cmd_file_add,
+        'file_list': cmd_file_list,
+        'file_search': cmd_file_search,
+        'file_info': cmd_file_info,
+        'file_context': cmd_file_context,
+        'folder_add': cmd_folder_add,
+        'folder_list': cmd_folder_list,
+        'project_add': cmd_project_add,
+        'project_list': cmd_project_list,
         'help': lambda a: parser.print_help()
     }
     

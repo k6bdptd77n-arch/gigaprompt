@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
 Super Memory Agent — Universal Background Memory Service
-=====================================================
-REST API daemon that works with ANY AI agent.
-Start with: super-memory-agent &
-Access from: curl http://localhost:8080/memory/...
+======================================================
+REST API daemon with File Memory System (MVP 8)
+Stores MD documentation attached to files and folders
 """
 
 import json
@@ -34,9 +33,11 @@ DEFAULT_PRICE = {"input": 5.00, "output": 25.00}
 
 
 def init_db():
-    """Initialize SQLite database."""
+    """Initialize SQLite database with all tables."""
     import sqlite3
     conn = sqlite3.connect(str(DB_PATH))
+    
+    # Memories table (existing)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +50,55 @@ def init_db():
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)")
+    
+    # Files table (NEW - MVP 8)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filepath TEXT NOT NULL UNIQUE,
+            filename TEXT NOT NULL,
+            extension TEXT,
+            purpose TEXT,
+            description TEXT,
+            decisions TEXT DEFAULT '[]',
+            patterns TEXT DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            search_text TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_filepath ON files(filepath)")
+    
+    # Folders table (NEW - MVP 8)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            purpose TEXT,
+            description TEXT,
+            blockers TEXT DEFAULT '[]',
+            child_files TEXT DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            search_text TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_folder_path ON folders(path)")
+    
+    # Projects table (NEW - MVP 8)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            root_path TEXT,
+            architecture TEXT,
+            key_decisions TEXT DEFAULT '[]',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -71,8 +121,6 @@ def prepare_search_text(text: str) -> str:
 
 def log_token_usage(model: str, usage: dict, source: str = "api"):
     """Log token usage to token_log.jsonl for tracking spend."""
-    import urllib.request
-
     prices = TOKEN_PRICES.get(model, DEFAULT_PRICE)
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
@@ -81,7 +129,7 @@ def log_token_usage(model: str, usage: dict, source: str = "api"):
 
     input_cost = (input_tokens / 1_000_000) * prices["input"]
     output_cost = (output_tokens / 1_000_000) * prices["output"]
-    cache_savings = (cache_read / 1_000_000) * prices["input"] * 0.9  # ~90% savings
+    cache_savings = (cache_read / 1_000_000) * prices["input"] * 0.9
 
     entry = {
         "timestamp": datetime.now().isoformat(),
@@ -148,7 +196,7 @@ def get_token_summary() -> dict:
 
 
 class MemoryHandler(BaseHTTPRequestHandler):
-    """HTTP handler for memory operations."""
+    """HTTP handler for memory + file operations."""
     
     def log_message(self, format, *args):
         """Suppress log messages."""
@@ -161,6 +209,10 @@ class MemoryHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
+    
+    # ============================================================
+    # MEMORY ENDPOINTS (existing)
+    # ============================================================
     
     def do_GET(self):
         """Handle GET requests."""
@@ -208,7 +260,6 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 self.send_json({'results': [], 'query': ''})
         
         elif path == '/context':
-            # Get context for AI agents
             cursor = conn.execute("""
                 SELECT text, type, timestamp FROM memories
                 ORDER BY id DESC LIMIT 20
@@ -246,9 +297,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
         elif path == '/tokens/daily':
             summary = get_token_summary()
-            daily = summary.get("daily_costs", {})
-            total = summary.get("total_cost_usd", 0)
-            self.send_json({"daily": daily, "total_usd": total})
+            self.send_json({"daily": summary.get("daily_costs", {}), "total_usd": summary.get("total_cost_usd", 0)})
 
         elif path == '/tokens/recent':
             entries = []
@@ -267,6 +316,105 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             self.send_json({"entries": entries})
+        
+        # ============================================================
+        # FILE ENDPOINTS (NEW - MVP 8)
+        # ============================================================
+        
+        elif path == '/files' or path == '/files/list':
+            cursor = conn.execute("SELECT * FROM files ORDER BY updated_at DESC LIMIT 50")
+            rows = [dict(row) for row in cursor.fetchall()]
+            self.send_json({'files': rows})
+        
+        elif path.startswith('/files/') and path.endswith('/info'):
+            # GET /files/<filepath>/info
+            filepath = path[7:-5]  # Extract filepath
+            cursor = conn.execute("SELECT * FROM files WHERE filepath = ?", (filepath,))
+            row = cursor.fetchone()
+            if row:
+                self.send_json({'file': dict(row)})
+            else:
+                self.send_json({'error': 'File not found', 'filepath': filepath}, 404)
+        
+        elif path.startswith('/files/search'):
+            query = parse_qs(parsed.query).get('q', [''])[0]
+            if query:
+                cursor = conn.execute("""
+                    SELECT * FROM files 
+                    WHERE search_text LIKE ? OR filepath LIKE ? OR purpose LIKE ?
+                    ORDER BY updated_at DESC LIMIT 20
+                """, (f'%{query.lower()}%', f'%{query.lower()}%', f'%{query.lower()}%'))
+                rows = [dict(row) for row in cursor.fetchall()]
+                self.send_json({'results': rows, 'query': query})
+            else:
+                self.send_json({'results': []})
+        
+        elif path == '/folders' or path == '/folders/list':
+            cursor = conn.execute("SELECT * FROM folders ORDER BY updated_at DESC LIMIT 50")
+            rows = [dict(row) for row in cursor.fetchall()]
+            self.send_json({'folders': rows})
+        
+        elif path.startswith('/folders/') and path.endswith('/info'):
+            folder_path = path[9:-5]
+            cursor = conn.execute("SELECT * FROM folders WHERE path = ?", (folder_path,))
+            row = cursor.fetchone()
+            if row:
+                self.send_json({'folder': dict(row)})
+            else:
+                self.send_json({'error': 'Folder not found', 'path': folder_path}, 404)
+        
+        elif path == '/projects' or path == '/projects/list':
+            cursor = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
+            rows = [dict(row) for row in cursor.fetchall()]
+            self.send_json({'projects': rows})
+        
+        elif path.startswith('/projects/') and path.endswith('/files'):
+            project_name = path[10:-6]
+            cursor = conn.execute("SELECT * FROM projects WHERE name = ?", (project_name,))
+            project = cursor.fetchone()
+            if project:
+                root = project['root_path'] or ''
+                # Find all files under this project
+                cursor = conn.execute("""
+                    SELECT * FROM files WHERE filepath LIKE ? ORDER BY filepath
+                """, (f'{root}%',))
+                rows = [dict(row) for row in cursor.fetchall()]
+                self.send_json({'project': project_name, 'files': rows})
+            else:
+                self.send_json({'error': 'Project not found'}, 404)
+        
+        elif path == '/file_context':
+            # NEW: Get full context for a file (from file + folder + related decisions)
+            query = parse_qs(parsed.query).get('path', [''])[0]
+            if not query:
+                self.send_json({'error': 'path parameter required'}, 400)
+            
+            # Get file info
+            cursor = conn.execute("SELECT * FROM files WHERE filepath = ?", (query,))
+            file_row = cursor.fetchone()
+            
+            # Get folder info
+            folder_path = str(Path(query).parent)
+            cursor = conn.execute("SELECT * FROM folders WHERE path = ?", (folder_path,))
+            folder_row = cursor.fetchone()
+            
+            # Get related decisions from memories
+            file_name = Path(query).name
+            cursor = conn.execute("""
+                SELECT * FROM memories 
+                WHERE text LIKE ? OR text LIKE ?
+                ORDER BY id DESC LIMIT 5
+            """, (f'%{file_name}%', f'%{query}%'))
+            related_memories = [dict(row) for row in cursor.fetchall()]
+            
+            context = {
+                'file': dict(file_row) if file_row else None,
+                'folder': dict(folder_row) if folder_row else None,
+                'related_memories': related_memories,
+                'query_path': query
+            }
+            
+            self.send_json(context)
         
         else:
             self.send_json({'error': 'Not found'}, 404)
@@ -287,6 +435,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
         
         conn = get_db()
         
+        # Existing memory endpoints
         if path == '/add':
             text = data.get('text', '')
             entry_type = data.get('type', 'general')
@@ -381,7 +530,157 @@ class MemoryHandler(BaseHTTPRequestHandler):
             source = data.get('source', 'api')
             entry = log_token_usage(model, usage, source)
             self.send_json({'success': True, 'logged': entry})
-
+        
+        # ============================================================
+        # FILE ENDPOINTS (NEW - MVP 8)
+        # ============================================================
+        
+        elif path == '/files/add' or path == '/files/update':
+            # Add or update file info
+            filepath = data.get('filepath', '')
+            purpose = data.get('purpose', '')
+            description = data.get('description', '')
+            decisions = data.get('decisions', [])
+            patterns = data.get('patterns', [])
+            
+            if not filepath:
+                self.send_json({'error': 'filepath required'}, 400)
+                conn.close()
+                return
+            
+            now = datetime.now().isoformat()
+            filename = Path(filepath).name
+            extension = Path(filepath).suffix
+            
+            # Try to update existing or insert new
+            cursor = conn.execute("SELECT id FROM files WHERE filepath = ?", (filepath,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                conn.execute("""
+                    UPDATE files SET
+                        purpose = ?,
+                        description = ?,
+                        decisions = ?,
+                        patterns = ?,
+                        updated_at = ?,
+                        search_text = ?
+                    WHERE filepath = ?
+                """, (purpose, description, json.dumps(decisions), json.dumps(patterns),
+                      now, prepare_search_text(f"{filepath} {purpose} {description} {' '.join(patterns)}"),
+                      filepath))
+            else:
+                conn.execute("""
+                    INSERT INTO files (filepath, filename, extension, purpose, description, 
+                                     decisions, patterns, created_at, updated_at, search_text)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (filepath, filename, extension, purpose, description,
+                      json.dumps(decisions), json.dumps(patterns),
+                      now, now, prepare_search_text(f"{filepath} {purpose} {description} {' '.join(patterns)}")))
+            
+            conn.commit()
+            self.send_json({'success': True, 'filepath': filepath})
+        
+        elif path == '/folders/add' or path == '/folders/update':
+            folder_path = data.get('path', '')
+            purpose = data.get('purpose', '')
+            description = data.get('description', '')
+            blockers = data.get('blockers', [])
+            
+            if not folder_path:
+                self.send_json({'error': 'path required'}, 400)
+                conn.close()
+                return
+            
+            now = datetime.now().isoformat()
+            name = Path(folder_path).name
+            
+            cursor = conn.execute("SELECT id FROM folders WHERE path = ?", (folder_path,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                conn.execute("""
+                    UPDATE folders SET
+                        purpose = ?,
+                        description = ?,
+                        blockers = ?,
+                        updated_at = ?,
+                        search_text = ?
+                    WHERE path = ?
+                """, (purpose, description, json.dumps(blockers), now,
+                      prepare_search_text(f"{folder_path} {purpose} {description}"),
+                      folder_path))
+            else:
+                conn.execute("""
+                    INSERT INTO folders (path, name, purpose, description, blockers, created_at, updated_at, search_text)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (folder_path, name, purpose, description, json.dumps(blockers),
+                      now, now, prepare_search_text(f"{folder_path} {purpose} {description}")))
+            
+            conn.commit()
+            self.send_json({'success': True, 'path': folder_path})
+        
+        elif path == '/projects/add' or path == '/projects/update':
+            name = data.get('name', '')
+            root_path = data.get('root_path', '')
+            architecture = data.get('architecture', '')
+            key_decisions = data.get('key_decisions', [])
+            
+            if not name:
+                self.send_json({'error': 'name required'}, 400)
+                conn.close()
+                return
+            
+            now = datetime.now().isoformat()
+            
+            cursor = conn.execute("SELECT id FROM projects WHERE name = ?", (name,))
+            existing = cursor.fetchone()
+            
+            if existing:
+                conn.execute("""
+                    UPDATE projects SET
+                        root_path = ?,
+                        architecture = ?,
+                        key_decisions = ?,
+                        updated_at = ?
+                    WHERE name = ?
+                """, (root_path, architecture, json.dumps(key_decisions), now, name))
+            else:
+                conn.execute("""
+                    INSERT INTO projects (name, root_path, architecture, key_decisions, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (name, root_path, architecture, json.dumps(key_decisions), now, now))
+            
+            conn.commit()
+            self.send_json({'success': True, 'name': name})
+        
+        elif path == '/files/delete':
+            filepath = data.get('filepath', '')
+            if filepath:
+                conn.execute("DELETE FROM files WHERE filepath = ?", (filepath,))
+                conn.commit()
+                self.send_json({'success': True, 'deleted': filepath})
+            else:
+                self.send_json({'error': 'filepath required'}, 400)
+        
+        elif path == '/folders/delete':
+            folder_path = data.get('path', '')
+            if folder_path:
+                conn.execute("DELETE FROM folders WHERE path = ?", (folder_path,))
+                conn.commit()
+                self.send_json({'success': True, 'deleted': folder_path})
+            else:
+                self.send_json({'error': 'path required'}, 400)
+        
+        elif path == '/projects/delete':
+            name = data.get('name', '')
+            if name:
+                conn.execute("DELETE FROM projects WHERE name = ?", (name,))
+                conn.commit()
+                self.send_json({'success': True, 'deleted': name})
+            else:
+                self.send_json({'error': 'name required'}, 400)
+        
         else:
             self.send_json({'error': 'Not found'}, 404)
 
@@ -395,19 +694,36 @@ def run_server(port=8080):
     print(f"Super Memory Agent running on http://127.0.0.1:{port}")
     print(f"DB: {DB_PATH}")
     print("\nEndpoints:")
-    print("  GET  /health             — Health check")
-    print("  GET  /summary           — Memory summary")
-    print("  GET  /recent            — Recent entries")
-    print("  GET  /search?q=query    — Search")
-    print("  GET  /context           — AI context (for prompts)")
-    print("  GET  /tokens/summary    — Token usage summary")
-    print("  GET  /tokens/daily      — Daily cost breakdown")
-    print("  GET  /tokens/recent     — Recent token log entries")
-    print("  POST /add               — Add entry")
-    print("  POST /add_completed     — Add completed task")
-    print("  POST /add_decision      — Add decision")
-    print("  POST /add_blocker       — Add blocker")
-    print("  POST /log_tokens        — Log token usage")
+    print("  GET  /health              — Health check")
+    print("  GET  /summary             — Memory summary")
+    print("  GET  /recent              — Recent entries")
+    print("  GET  /search?q=           — Search memories")
+    print("  GET  /context             — AI context")
+    print("  GET  /tokens/summary      — Token usage")
+    print("  POST /add                 — Add entry")
+    print("  POST /add_completed       — Add completed task")
+    print("  POST /add_decision        — Add decision")
+    print("  POST /add_blocker         — Add blocker")
+    print("  POST /log_tokens         — Log token usage")
+    print()
+    print("  FILE MEMORY (MVP 8):")
+    print("  GET  /files/list          — List all files")
+    print("  GET  /files/<path>/info   — File details")
+    print("  GET  /files/search?q=     — Search files")
+    print("  POST /files/add           — Add/update file")
+    print("  DELETE /files/delete      — Delete file")
+    print()
+    print("  FOLDER MEMORY:")
+    print("  GET  /folders/list        — List folders")
+    print("  GET  /folders/<path>/info — Folder details")
+    print("  POST /folders/add         — Add/update folder")
+    print()
+    print("  PROJECT MEMORY:")
+    print("  GET  /projects/list       — List projects")
+    print("  POST /projects/add        — Add/update project")
+    print()
+    print("  CONTEXT:")
+    print("  GET  /file_context?path=  — Full context for file")
     print("\nCtrl+C to stop")
     
     try:
