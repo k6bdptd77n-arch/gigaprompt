@@ -47,9 +47,29 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 # Database
 DB_PATH = Path.home() / ".super_memory" / "memory.db"
 TOKEN_LOG_PATH = Path.home() / ".super_memory" / "token_log.jsonl"
+CONFIG_PATH = Path.home() / ".super_memory" / "config.json"
 
 # Ensure directory
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def load_config() -> dict:
+    """Load config from JSON file."""
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+
+def save_config(config: dict):
+    """Save config to JSON file."""
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
 
 # Token pricing (Anthropic API — USD per 1M tokens)
 TOKEN_PRICES = {
@@ -64,8 +84,23 @@ def init_db():
     """Initialize SQLite database with all tables."""
     import sqlite3
     conn = sqlite3.connect(str(DB_PATH))
-    
-    # Memories table (existing)
+
+    # Agents table (multi-agent support)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS agents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            agent_type TEXT DEFAULT 'claude',
+            api_key TEXT,
+            api_url TEXT,
+            model TEXT,
+            config TEXT DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    # Memories table (with agent_id for multi-agent)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS memories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,12 +109,13 @@ def init_db():
             timestamp TEXT NOT NULL,
             source TEXT DEFAULT 'unknown',
             metadata TEXT DEFAULT '{}',
-            search_text TEXT
+            search_text TEXT,
+            agent_id TEXT DEFAULT 'default'
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)")
-    
-    # Files table (NEW - MVP 8)
+
+    # Files table (with agent_id)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS files (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,12 +128,13 @@ def init_db():
             patterns TEXT DEFAULT '[]',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            search_text TEXT
+            search_text TEXT,
+            agent_id TEXT DEFAULT 'default'
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_filepath ON files(filepath)")
-    
-    # Folders table (NEW - MVP 8)
+
+    # Folders table (with agent_id)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS folders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,12 +146,13 @@ def init_db():
             child_files TEXT DEFAULT '[]',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            search_text TEXT
+            search_text TEXT,
+            agent_id TEXT DEFAULT 'default'
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_folder_path ON folders(path)")
-    
-    # Projects table (NEW - MVP 8)
+
+    # Projects table (global - shared across agents)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,7 +164,26 @@ def init_db():
             updated_at TEXT NOT NULL
         )
     """)
-    
+
+    # Migration: add agent_id column if it doesn't exist (for existing databases)
+    try:
+        conn.execute("ALTER TABLE memories ADD COLUMN agent_id TEXT DEFAULT 'default'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_id ON memories(agent_id)")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    try:
+        conn.execute("ALTER TABLE files ADD COLUMN agent_id TEXT DEFAULT 'default'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_agent_id ON files(agent_id)")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
+    try:
+        conn.execute("ALTER TABLE folders ADD COLUMN agent_id TEXT DEFAULT 'default'")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_folders_agent_id ON folders(agent_id)")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     conn.commit()
     conn.close()
 
@@ -137,6 +194,26 @@ def get_db():
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def get_registry_db():
+    """Get registry database connection (alias for get_db in single-DB architecture)."""
+    return get_db()
+
+
+def get_active_agent() -> str:
+    """Get the currently active agent name from config."""
+    config = load_config()
+    return config.get("active_agent", "default")
+
+
+def get_agent_by_name(name: str) -> dict:
+    """Get agent configuration by name."""
+    conn = get_db()
+    cursor = conn.execute("SELECT * FROM agents WHERE name = ?", (name,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def prepare_search_text(text: str) -> str:
@@ -393,14 +470,18 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 self.send_json({'error': 'Folder not found', 'path': folder_path}, 404)
         
         elif path == '/projects' or path == '/projects/list':
-            cursor = conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
+            reg_conn = get_registry_db()
+            cursor = reg_conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
             rows = [dict(row) for row in cursor.fetchall()]
+            reg_conn.close()
             self.send_json({'projects': rows})
         
         elif path.startswith('/projects/') and path.endswith('/files'):
             project_name = path[10:-6]
-            cursor = conn.execute("SELECT * FROM projects WHERE name = ?", (project_name,))
+            reg_conn = get_registry_db()
+            cursor = reg_conn.execute("SELECT * FROM projects WHERE name = ?", (project_name,))
             project = cursor.fetchone()
+            reg_conn.close()
             if project:
                 root = project['root_path'] or ''
                 # Find all files under this project
@@ -444,7 +525,39 @@ class MemoryHandler(BaseHTTPRequestHandler):
             }
             
             self.send_json(context)
-        
+
+        # ============================================================
+        # AGENT ENDPOINTS (multi-agent)
+        # ============================================================
+
+        elif path == '/agents':
+            cursor = conn.execute("SELECT * FROM agents ORDER BY name")
+            rows = [dict(row) for row in cursor.fetchall()]
+            # Remove api_key from listing for security
+            for row in rows:
+                row.pop('api_key', None)
+            active_agent = get_active_agent()
+            self.send_json({'agents': rows, 'active': active_agent})
+
+        elif path.startswith('/agents/') and path != '/agents/':
+            # GET /agents/<name>
+            parts = path.split('/')
+            if len(parts) >= 3:
+                agent_name = parts[2]
+                cursor = conn.execute("SELECT * FROM agents WHERE name = ?", (agent_name,))
+                row = cursor.fetchone()
+                if row:
+                    d = dict(row)
+                    d.pop('api_key', None)  # Don't expose API key
+                    self.send_json({'agent': d})
+                else:
+                    self.send_json({'error': 'Agent not found'}, 404)
+            else:
+                self.send_json({'error': 'Invalid path'}, 400)
+
+        elif path == '/active_agent':
+            self.send_json({'active': get_active_agent()})
+
         else:
             self.send_json({'error': 'Not found'}, 404)
         
@@ -463,7 +576,98 @@ class MemoryHandler(BaseHTTPRequestHandler):
             data = {}
         
         conn = get_db()
-        
+
+        # ============================================================
+        # AGENT MANAGEMENT ENDPOINTS (POST)
+        # ============================================================
+
+        if path == '/agents/add' or path == '/agents/update':
+            name = data.get('name', '')
+            agent_type = data.get('type', 'claude')
+            api_key = data.get('api_key', '')
+            api_url = data.get('api_url', '')
+            model = data.get('model', '')
+            config = data.get('config', {})
+
+            if not name:
+                self.send_json({'error': 'name required'}, 400)
+                conn.close()
+                return
+
+            now = datetime.now().isoformat()
+
+            cursor = conn.execute("SELECT id FROM agents WHERE name = ?", (name,))
+            existing = cursor.fetchone()
+
+            if existing:
+                conn.execute("""
+                    UPDATE agents SET
+                        agent_type = ?,
+                        api_key = ?,
+                        api_url = ?,
+                        model = ?,
+                        config = ?,
+                        updated_at = ?
+                    WHERE name = ?
+                """, (agent_type, api_key, api_url, model, json.dumps(config), now, name))
+            else:
+                conn.execute("""
+                    INSERT INTO agents (name, agent_type, api_key, api_url, model, config, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (name, agent_type, api_key, api_url, model, json.dumps(config), now, now))
+
+            conn.commit()
+            self.send_json({'success': True, 'name': name})
+            conn.close()
+            return
+
+        elif path == '/agents/delete':
+            name = data.get('name', '')
+            if not name:
+                self.send_json({'error': 'name required'}, 400)
+                conn.close()
+                return
+
+            if name == 'default':
+                self.send_json({'error': 'Cannot delete default agent'}, 400)
+                conn.close()
+                return
+
+            conn.execute("DELETE FROM agents WHERE name = ?", (name,))
+            conn.commit()
+
+            # If deleted agent was active, switch to default
+            config = load_config()
+            if config.get('active_agent') == name:
+                config['active_agent'] = 'default'
+                save_config(config)
+
+            self.send_json({'success': True, 'deleted': name})
+            conn.close()
+            return
+
+        elif path == '/agents/select':
+            name = data.get('name', '')
+            if not name:
+                self.send_json({'error': 'name required'}, 400)
+                conn.close()
+                return
+
+            # Verify agent exists
+            cursor = conn.execute("SELECT id FROM agents WHERE name = ?", (name,))
+            if not cursor.fetchone():
+                self.send_json({'error': f'Agent {name} not found'}, 404)
+                conn.close()
+                return
+
+            config = load_config()
+            config['active_agent'] = name
+            save_config(config)
+
+            self.send_json({'success': True, 'active': name})
+            conn.close()
+            return
+
         # Existing memory endpoints
         if path == '/add':
             text = data.get('text', '')
@@ -654,19 +858,20 @@ class MemoryHandler(BaseHTTPRequestHandler):
             root_path = data.get('root_path', '')
             architecture = data.get('architecture', '')
             key_decisions = data.get('key_decisions', [])
-            
+
             if not name:
                 self.send_json({'error': 'name required'}, 400)
                 conn.close()
                 return
-            
+
             now = datetime.now().isoformat()
-            
-            cursor = conn.execute("SELECT id FROM projects WHERE name = ?", (name,))
+
+            reg_conn = get_registry_db()
+            cursor = reg_conn.execute("SELECT id FROM projects WHERE name = ?", (name,))
             existing = cursor.fetchone()
-            
+
             if existing:
-                conn.execute("""
+                reg_conn.execute("""
                     UPDATE projects SET
                         root_path = ?,
                         architecture = ?,
@@ -675,12 +880,13 @@ class MemoryHandler(BaseHTTPRequestHandler):
                     WHERE name = ?
                 """, (root_path, architecture, json.dumps(key_decisions), now, name))
             else:
-                conn.execute("""
+                reg_conn.execute("""
                     INSERT INTO projects (name, root_path, architecture, key_decisions, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (name, root_path, architecture, json.dumps(key_decisions), now, now))
-            
-            conn.commit()
+
+            reg_conn.commit()
+            reg_conn.close()
             self.send_json({'success': True, 'name': name})
         
         elif path == '/files/delete':
@@ -704,8 +910,10 @@ class MemoryHandler(BaseHTTPRequestHandler):
         elif path == '/projects/delete':
             name = data.get('name', '')
             if name:
-                conn.execute("DELETE FROM projects WHERE name = ?", (name,))
-                conn.commit()
+                reg_conn = get_registry_db()
+                reg_conn.execute("DELETE FROM projects WHERE name = ?", (name,))
+                reg_conn.commit()
+                reg_conn.close()
                 self.send_json({'success': True, 'deleted': name})
             else:
                 self.send_json({'error': 'name required'}, 400)

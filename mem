@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 Super Memory CLI
 ================
@@ -367,6 +367,223 @@ def cmd_stop(args):
     return 0
 
 
+def cmd_shell(args):
+    """Interactive shell mode."""
+    safe_print("=" * 50)
+    safe_print("  Super Memory — Interactive Shell")
+    safe_print("=" * 50)
+    safe_print("  Type 'help' for commands, 'exit' to quit")
+    safe_print("=" * 50)
+
+    while True:
+        try:
+            line = input("\n(mem) ").strip()
+        except (EOFError, KeyboardInterrupt):
+            safe_print("\n\n[Bye!]")
+            break
+
+        if not line:
+            continue
+
+        if line in ('exit', 'quit', 'q'):
+            safe_print("[Bye!]")
+            break
+
+        if line in ('help', '?'):
+            safe_print("""
+  Commands:
+    add <text>           — Add entry
+    done <task>         — Mark task completed
+    decision <topic>    — Add decision
+    blocked <task>      — Add blocker
+    search <query>      — Search memories
+    recent [n]          — Recent entries
+    summary             — Memory summary
+    context             — AI context
+    tokens              — Token usage
+    status              — Agent status
+
+    project_list        — List projects
+    project_add <name>  — Add project
+    file_list           — List tracked files
+    folder_list         — List tracked folders
+
+    agent_list          — List agents
+    agent_add <name>    — Add agent
+    agent_select <name> — Switch agent
+    agent_info [name]   — Agent info
+
+    exit, quit, q       — Exit shell
+""")
+            continue
+
+        # Parse command
+        parts = line.split(None, 1)
+        cmd = parts[0] if parts else ''
+        arg = parts[1] if len(parts) > 1 else ''
+
+        if cmd == 'add':
+            if arg:
+                result = api_post("/add", {"text": arg, "source": "shell"})
+                if "error" not in result:
+                    safe_print(f"[OK] Added")
+                else:
+                    safe_print(f"[X] Error: {result['error']}")
+            else:
+                safe_print("[X] Usage: add <text>")
+
+        elif cmd == 'done':
+            if arg:
+                result = api_post("/add_completed", {"task": arg, "source": "shell"})
+                if "error" not in result:
+                    safe_print(f"[OK] Completed: {arg}")
+                else:
+                    safe_print(f"[X] Error: {result['error']}")
+            else:
+                safe_print("[X] Usage: done <task>")
+
+        elif cmd == 'search':
+            if arg:
+                result = api_get(f"/search?q={arg}")
+                if "error" not in result:
+                    results = result.get("results", [])
+                    if not results:
+                        safe_print(f"  No results for: {arg}")
+                    for r in results[:10]:
+                        safe_print(f"  [{r.get('type', '?')}] {r.get('text', '')[:60]}")
+                else:
+                    safe_print(f"[X] Error: {result['error']}")
+            else:
+                safe_print("[X] Usage: search <query>")
+
+        elif cmd == 'recent':
+            limit = int(arg) if arg.isdigit() else 10
+            result = api_get("/recent")
+            if "error" not in result:
+                memories = result.get("memories", [])
+                if not memories:
+                    safe_print("  No entries yet")
+                for m in memories[:limit]:
+                    safe_print(f"  [{m.get('type', '?')}] {m.get('text', '')[:60]}")
+            else:
+                safe_print(f"[X] Error: {result['error']}")
+
+        elif cmd == 'summary':
+            result = api_get("/summary")
+            if "error" not in result:
+                safe_print(f"""
+  Total:     {result.get('total', 0)}
+  Completed: {result.get('completed', 0)}
+  Decisions: {result.get('decisions', 0)}
+  Blockers:  {result.get('blockers', 0)}
+""")
+            else:
+                safe_print(f"[X] Error: {result['error']}")
+
+        elif cmd == 'status':
+            result = api_get("/health")
+            if "error" not in result:
+                safe_print(f"[OK] Super Memory running")
+            else:
+                safe_print("[X] Agent not running. Start with: start")
+
+        elif cmd == 'start':
+            import subprocess
+            if is_agent_running():
+                safe_print("[OK] Already running")
+            else:
+                proc = subprocess.Popen([sys.executable, str(AGENT_PATH)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                import time
+                for i in range(10):
+                    time.sleep(0.5)
+                    if is_agent_running():
+                        break
+                safe_print("[OK] Started")
+
+        elif cmd == 'project_list':
+            result = api_get("/projects/list")
+            if "error" not in result:
+                projects = result.get('projects', [])
+                if not projects:
+                    safe_print("  No projects")
+                for p in projects:
+                    safe_print(f"  - {p.get('name')}")
+            else:
+                # Try /projects endpoint
+                result = api_get("/projects")
+                if "error" not in result:
+                    projects = result.get('projects', [])
+                    if not projects:
+                        safe_print("  No projects")
+                    for p in projects:
+                        safe_print(f"  - {p.get('name')}")
+                else:
+                    safe_print(f"[X] Error: {result['error']}")
+
+        elif cmd == 'agent_list':
+            result = api_get("/agents")
+            if "error" not in result:
+                agents = result.get('agents', [])
+                active = result.get('active', 'default')
+                if not agents:
+                    safe_print("  No agents configured")
+                for a in agents:
+                    name = a.get('name', '')
+                    marker = " (active)" if name == active else ""
+                    safe_print(f"  {name}{marker}")
+            else:
+                safe_print(f"[X] Error: {result['error']}")
+
+        elif cmd == 'agent_add':
+            if not arg:
+                safe_print("[X] Usage: agent_add <name>")
+            else:
+                # Shell doesn't parse flags, so use first word as name
+                name = arg.split()[0] if ' ' in arg else arg
+                result = api_post("/agents/add", {"name": name, "type": "claude"})
+                if "error" not in result:
+                    safe_print(f"[OK] Agent added: {name}")
+                else:
+                    safe_print(f"[X] Error: {result['error']}")
+
+        elif cmd == 'agent_select':
+            if not arg:
+                safe_print("[X] Usage: agent_select <name>")
+            else:
+                result = api_post("/agents/select", {"name": arg})
+                if "error" not in result:
+                    safe_print(f"[OK] Active agent: {arg}")
+                else:
+                    safe_print(f"[X] Error: {result['error']}")
+
+        elif cmd == 'agent_info':
+            name = arg or 'default'
+            result = api_get(f"/agents/{name}")
+            if "error" not in result:
+                a = result.get('agent', {})
+                safe_print(f"  Name: {a.get('name')}")
+                safe_print(f"  Type: {a.get('agent_type', 'N/A')}")
+                safe_print(f"  Model: {a.get('model', 'N/A')}")
+            else:
+                safe_print(f"[X] Error: {result.get('error', 'Unknown')}")
+
+        elif cmd == 'agent_delete':
+            if not arg:
+                safe_print("[X] Usage: agent_delete <name>")
+            elif arg == 'default':
+                safe_print("[X] Cannot delete 'default' agent")
+            else:
+                result = api_post("/agents/delete", {"name": arg})
+                if "error" not in result:
+                    safe_print(f"[OK] Agent deleted: {arg}")
+                else:
+                    safe_print(f"[X] Error: {result['error']}")
+
+        else:
+            safe_print(f"[X] Unknown command: {cmd}")
+            safe_print("  Type 'help' for available commands")
+
+
 def cmd_install(args):
     """Install agent and enable auto-start."""
     safe_print("🔧 Installing Super Memory...")
@@ -633,6 +850,115 @@ def cmd_project_list(args):
 
 
 # ============================================================
+# AGENT COMMANDS (multi-agent)
+# ============================================================
+
+def cmd_agent_list(args):
+    """List all agents."""
+    result = api_get("/agents")
+
+    if "error" in result:
+        safe_print(f"[X] Error: {result['error']}")
+        return 1
+
+    agents = result.get('agents', [])
+    active = result.get('active', 'default')
+
+    if not agents:
+        safe_print("No agents configured")
+        safe_print("   Run: mem agent_add <name> --type claude")
+        return 0
+
+    safe_print(f"Agents: {len(agents)}")
+    for a in agents:
+        name = a.get('name', '')
+        marker = " (active)" if name == active else ""
+        agent_type = a.get('agent_type', 'unknown')
+        model = a.get('model', '')
+        safe_print(f"  {name}{marker}")
+        safe_print(f"    Type: {agent_type}")
+        if model:
+            safe_print(f"    Model: {model}")
+
+    return 0
+
+
+def cmd_agent_add(args):
+    """Add or update an agent."""
+    name = args.name
+    agent_type = args.type or 'claude'
+    api_key = args.api_key or ''
+    api_url = args.api_url or ''
+    model = args.model or ''
+
+    result = api_post("/agents/add", {
+        "name": name,
+        "type": agent_type,
+        "api_key": api_key,
+        "api_url": api_url,
+        "model": model,
+        "config": {}
+    })
+
+    if "error" in result:
+        safe_print(f"[X] Error: {result['error']}")
+        return 1
+
+    safe_print(f"[OK] Agent added: {name}")
+    return 0
+
+
+def cmd_agent_select(args):
+    """Select active agent."""
+    name = args.name
+
+    result = api_post("/agents/select", {"name": name})
+
+    if "error" in result:
+        safe_print(f"[X] Error: {result['error']}")
+        return 1
+
+    safe_print(f"[OK] Active agent: {name}")
+    return 0
+
+
+def cmd_agent_delete(args):
+    """Delete an agent."""
+    name = args.name
+
+    if name == 'default':
+        safe_print("[X] Cannot delete 'default' agent")
+        return 1
+
+    result = api_post("/agents/delete", {"name": name})
+
+    if "error" in result:
+        safe_print(f"[X] Error: {result['error']}")
+        return 1
+
+    safe_print(f"[OK] Agent deleted: {name}")
+    return 0
+
+
+def cmd_agent_info(args):
+    """Get info about an agent."""
+    name = args.name
+    result = api_get(f"/agents/{name}")
+
+    if "error" in result:
+        safe_print(f"[X] Error: {result.get('error', 'Unknown')}")
+        return 1
+
+    a = result.get('agent', {})
+    safe_print(f"\nAgent: {a.get('name', '')}")
+    safe_print(f"  Type: {a.get('agent_type', 'N/A')}")
+    safe_print(f"  Model: {a.get('model', 'N/A')}")
+    safe_print(f"  API URL: {a.get('api_url', 'N/A')}")
+    safe_print(f"  Created: {a.get('created_at', 'N/A')}")
+    return 0
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -711,13 +1037,31 @@ def main():
 
     p_project_list = subparsers.add_parser('project_list', help='List projects')
 
+    # Agent commands
+    p_agent_list = subparsers.add_parser('agent_list', help='List all agents')
+    p_agent_add = subparsers.add_parser('agent_add', help='Add/update agent')
+    p_agent_add.add_argument('name', help='Agent name')
+    p_agent_add.add_argument('--type', '-t', default='claude', help='Agent type (claude, openai, gemini)')
+    p_agent_add.add_argument('--api-key', default='', help='API key')
+    p_agent_add.add_argument('--api-url', default='', help='API URL (optional)')
+    p_agent_add.add_argument('--model', '-m', default='', help='Model name')
+    p_agent_select = subparsers.add_parser('agent_select', help='Select active agent')
+    p_agent_select.add_argument('name', help='Agent name')
+    p_agent_delete = subparsers.add_parser('agent_delete', help='Delete agent')
+    p_agent_delete.add_argument('name', help='Agent name')
+    p_agent_info = subparsers.add_parser('agent_info', help='Get agent info')
+    p_agent_info.add_argument('name', nargs='?', help='Agent name (default: current)')
+
     subparsers.add_parser('help', help='Show help')
-    
+
+    # Interactive mode option
+    p_shell = subparsers.add_parser('shell', help='Interactive shell')
+
     args = parser.parse_args()
-    
+
     if not args.command:
-        args.command = 'status'
-    
+        args.command = 'shell'  # Default to interactive shell
+
     commands = {
         'add': cmd_add,
         'done': cmd_done,
@@ -741,9 +1085,15 @@ def main():
         'folder_list': cmd_folder_list,
         'project_add': cmd_project_add,
         'project_list': cmd_project_list,
-        'help': lambda a: parser.print_help()
+        'agent_list': cmd_agent_list,
+        'agent_add': cmd_agent_add,
+        'agent_select': cmd_agent_select,
+        'agent_delete': cmd_agent_delete,
+        'agent_info': cmd_agent_info,
+        'help': lambda a: parser.print_help(),
+        'shell': cmd_shell
     }
-    
+
     cmd = commands.get(args.command)
     if cmd:
         sys.exit(cmd(args) or 0)
