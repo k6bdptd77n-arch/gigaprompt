@@ -48,34 +48,51 @@ def api_get(endpoint: str) -> dict:
     """GET request to memory API."""
     import urllib.request
     import urllib.error
-    
+
     url = f"{API_HOST}{endpoint}"
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             return json.loads(resp.read().decode())
-    except urllib.error.URLError as e:
-        return {"error": str(e)}
+    except urllib.error.URLError:
+        return {"error": "not_running"}
+    except (json.JSONDecodeError, ValueError) as e:
+        return {"error": f"invalid_response: {e}"}
 
 
 def api_post(endpoint: str, data: dict) -> dict:
     """POST request to memory API."""
     import urllib.request
     import urllib.error
-    
+
     url = f"{API_HOST}{endpoint}"
     payload = json.dumps(data).encode()
-    
+
     req = urllib.request.Request(
         url,
         data=payload,
         headers={'Content-Type': 'application/json'}
     )
-    
+
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode())
-    except urllib.error.URLError as e:
-        return {"error": str(e)}
+    except urllib.error.URLError:
+        return {"error": "not_running"}
+    except (json.JSONDecodeError, ValueError) as e:
+        return {"error": f"invalid_response: {e}"}
+
+
+def _check_running_hint(result: dict) -> bool:
+    """Print agent-not-running hint if needed. Returns True if error."""
+    if "error" in result:
+        err = result["error"]
+        if err == "not_running":
+            safe_print("[X] Super Memory is not running.")
+            safe_print("    Start with: mem start")
+        else:
+            safe_print(f"[X] Error: {err}")
+        return True
+    return False
 
 
 def is_agent_running() -> bool:
@@ -101,11 +118,10 @@ def cmd_add(args):
         "type": args.type or "general",
         "source": "cli"
     })
-    
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+
+    if _check_running_hint(result):
         return 1
-    
+
     safe_print(f"[OK] Added: {text[:50]}...")
     return 0
 
@@ -122,11 +138,10 @@ def cmd_done(args):
         "task": task,
         "source": "cli"
     })
-    
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+
+    if _check_running_hint(result):
         return 1
-    
+
     safe_print(f"[OK] Completed: {task[:50]}...")
     return 0
 
@@ -148,12 +163,11 @@ def cmd_decision(args):
         "reason": reason,
         "source": "cli"
     })
-    
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+
+    if _check_running_hint(result):
         return 1
-    
-    safe_print(f"[=]️ Decision added: {topic[:50]}...")
+
+    safe_print(f"[OK] Decision added: {topic[:50]}...")
     return 0
 
 
@@ -174,11 +188,10 @@ def cmd_blocked(args):
         "needed": needed,
         "source": "cli"
     })
-    
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+
+    if _check_running_hint(result):
         return 1
-    
+
     safe_print(f"[!] Blocker added: {task[:50]}...")
     return 0
 
@@ -191,56 +204,52 @@ def cmd_search(args):
         safe_print("   Usage: mem search \"auth\"")
         return 1
     
-    result = api_get(f"/search?q={query}")
-    
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+    from urllib.parse import urlencode
+    result = api_get(f"/search?{urlencode({'q': query})}")
+
+    if _check_running_hint(result):
         return 1
-    
+
     results = result.get("results", [])
-    
+
     if not results:
         safe_print(f"No results for: {query}")
         return 0
-    
+
     safe_print(f"Found {len(results)} results:\n")
     for r in results[:10]:
         safe_print(f"[{r.get('type', '?')}] {r.get('text', '')[:80]}")
-        pass
-    
+
     return 0
 
 
 def cmd_recent(args):
     """Show recent entries."""
     result = api_get("/recent")
-    
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+
+    if _check_running_hint(result):
         return 1
-    
+
     memories = result.get("memories", [])
-    
+
     if not memories:
         safe_print("No entries yet")
         return 0
-    
+
     limit = args.limit or 10
     for m in memories[:limit]:
         safe_print(f"[{m.get('type', '?')}] {m.get('text', '')[:80]}")
-    
+
     return 0
 
 
 def cmd_summary(args):
     """Show memory summary."""
     result = api_get("/summary")
-    
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+
+    if _check_running_hint(result):
         return 1
-    
-    pass
+
     safe_print("[S] Memory Summary")
     safe_print("=" * 40)
     safe_print(f"  Total:     {result.get('total', 0)}")
@@ -248,19 +257,19 @@ def cmd_summary(args):
     safe_print(f"  Decisions: {result.get('decisions', 0)}")
     safe_print(f"  Blockers:  {result.get('blockers', 0)}")
     safe_print(f"  Learnings: {result.get('learnings', 0)}")
-    pass
-    
+    if result.get('active_agent'):
+        safe_print(f"  Agent:     {result.get('active_agent')}")
+
     return 0
 
 
 def cmd_context(args):
     """Get AI context."""
     result = api_get("/context")
-    
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+
+    if _check_running_hint(result):
         return 1
-    
+
     context = result.get("context", "")
     safe_print(context or "No context available")
     
@@ -271,8 +280,7 @@ def cmd_tokens(args):
     """Show token usage summary."""
     result = api_get("/tokens/summary")
 
-    if "error" in result:
-        safe_print(f"[X] Error: {result['error']}")
+    if _check_running_hint(result):
         return 1
 
     safe_print("[S] Token Usage Summary")
@@ -315,30 +323,36 @@ def cmd_start(args):
     if is_agent_running():
         safe_print("[OK] Already running")
         return 0
-    
+
     if not AGENT_PATH.exists():
         safe_print(f"[X] Agent not found: {AGENT_PATH}")
+        safe_print(f"   Run: mem install")
         return 1
-    
+
     import subprocess
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    
+
+    log_path = Path.home() / ".super_memory" / "agent.log"
+    pid_file = Path.home() / ".super_memory" / "agent.pid"
+
     proc = subprocess.Popen(
         [sys.executable, str(AGENT_PATH)],
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=open(log_path, "a"),
+        stderr=subprocess.STDOUT,
         start_new_session=True
     )
-    
+
+    pid_file.write_text(str(proc.pid))
+
     import time
     for i in range(10):
         time.sleep(0.5)
         if is_agent_running():
             safe_print(f"[OK] Started (PID: {proc.pid})")
             return 0
-    
+
     safe_print("⚠️  Started but not responding yet")
     return 0
 
@@ -348,22 +362,57 @@ def cmd_stop(args):
     if not is_agent_running():
         safe_print("Not running")
         return 0
-    
+
     import subprocess
+    import signal
+
+    pid_file = Path.home() / ".super_memory" / "agent.pid"
+
+    # Try PID file first (most reliable)
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            os.kill(pid, signal.SIGTERM)
+            pid_file.unlink(missing_ok=True)
+            safe_print("[OK] Stopped")
+            return 0
+        except (ProcessLookupError, ValueError, OSError):
+            pid_file.unlink(missing_ok=True)
+
+    # Fallback: platform-specific port scan
     try:
-        result = subprocess.run(
-            ["lsof", "-ti", ":8080"],
-            capture_output=True, text=True
-        )
-        pids = result.stdout.strip().split('\n')
-        for pid in pids:
-            if pid:
-                os.kill(int(pid), 9)
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True, text=True
+            )
+            for line in result.stdout.splitlines():
+                if ":8080" in line and "LISTENING" in line:
+                    pid = line.strip().split()[-1]
+                    subprocess.run(["taskkill", "/PID", pid, "/F"], capture_output=True)
+        else:
+            result = subprocess.run(
+                ["lsof", "-ti", ":8080"],
+                capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                for pid in result.stdout.strip().split('\n'):
+                    if pid:
+                        os.kill(int(pid), signal.SIGTERM)
+            else:
+                # lsof not available — try ss/netstat
+                result = subprocess.run(
+                    ["ss", "-tlnp", "sport", "=", ":8080"],
+                    capture_output=True, text=True
+                )
+                import re
+                for pid in re.findall(r'pid=(\d+)', result.stdout):
+                    os.kill(int(pid), signal.SIGTERM)
         safe_print("[OK] Stopped")
-    except:
-        safe_print("⚠️  Could not stop")
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        safe_print(f"[X] Could not stop agent: {e}")
         return 1
-    
+
     return 0
 
 
@@ -444,7 +493,8 @@ def cmd_shell(args):
 
         elif cmd == 'search':
             if arg:
-                result = api_get(f"/search?q={arg}")
+                from urllib.parse import urlencode
+                result = api_get(f"/search?{urlencode({'q': arg})}")
                 if "error" not in result:
                     results = result.get("results", [])
                     if not results:
@@ -602,15 +652,12 @@ def cmd_install(args):
                 shutil.copy(src, super_mem_dir / f)
                 safe_print(f"   [OK] {f}")
     
-    pass
     safe_print("[OK] Installation complete!")
-    pass
     safe_print("Next steps:")
     safe_print("  1. Restart terminal or source ~/.bashrc")
     safe_print("  2. Run: mem start")
     safe_print("  3. Run: mem add \"First entry\"")
-    pass
-    
+
     return 0
 
 
@@ -753,8 +800,7 @@ def cmd_file_context(args):
         safe_print(f"\n🧠 RELATED MEMORIES:")
         for m in memories[:3]:
             safe_print(f"   - {m.get('text', '')[:80]}")
-    
-    pass
+
     return 0
 
 
@@ -959,6 +1005,158 @@ def cmd_agent_info(args):
 
 
 # ============================================================
+# MEMORY CRUD COMMANDS
+# ============================================================
+
+def cmd_delete(args):
+    """Delete a memory entry by ID."""
+    mem_id = args.id
+    result = api_post("/memories/delete", {"id": mem_id})
+
+    if _check_running_hint(result):
+        return 1
+
+    safe_print(f"[OK] Deleted memory #{mem_id}")
+    return 0
+
+
+def cmd_edit(args):
+    """Edit a memory entry by ID."""
+    mem_id = args.id
+    new_text = ' '.join(args.text) if args.text else ""
+
+    if not new_text:
+        safe_print("[X] Error: text required")
+        safe_print("   Usage: mem edit <id> \"new text\"")
+        return 1
+
+    result = api_post("/memories/edit", {"id": mem_id, "text": new_text})
+
+    if _check_running_hint(result):
+        return 1
+
+    safe_print(f"[OK] Updated memory #{mem_id}")
+    return 0
+
+
+# ============================================================
+# UNIFIED CLI — inject, monitor, daemon
+# ============================================================
+
+def cmd_inject(args):
+    """Inject memory context into a prompt (= context_inject.py)."""
+    from urllib.parse import urlencode
+
+    # Get context from API
+    result = api_get("/context")
+    if _check_running_hint(result):
+        return 1
+
+    context = result.get("context", "")
+
+    # Build prompt from args
+    if args.file:
+        try:
+            prompt = open(args.file, encoding="utf-8").read()
+        except OSError as e:
+            safe_print(f"[X] Cannot read file: {e}")
+            return 1
+    elif args.stdin or not sys.stdin.isatty():
+        prompt = sys.stdin.read()
+    elif args.prompt:
+        prompt = args.prompt
+    else:
+        # Just print context
+        safe_print(context or "No context available")
+        return 0
+
+    parts = []
+    if args.prefix:
+        parts.append(args.prefix)
+    if context:
+        parts.append(context)
+    parts.append(prompt)
+    if args.suffix:
+        parts.append(args.suffix)
+
+    if args.summary:
+        s = api_get("/summary")
+        if "error" not in s:
+            parts.append(
+                f"\n## Memory Summary\n"
+                f"Total: {s.get('total', 0)} | "
+                f"Completed: {s.get('completed', 0)} | "
+                f"Decisions: {s.get('decisions', 0)} | "
+                f"Blockers: {s.get('blockers', 0)}"
+            )
+
+    safe_print("\n".join(parts))
+    return 0
+
+
+def cmd_monitor(args):
+    """Start the web dashboard (desktop_monitor/app.py)."""
+    import subprocess
+
+    monitor_path = Path(__file__).parent / "desktop_monitor" / "app.py"
+    if not monitor_path.exists():
+        monitor_path = Path.home() / ".super_memory" / "desktop_monitor" / "app.py"
+
+    if not monitor_path.exists():
+        safe_print("[X] desktop_monitor not found.")
+        safe_print("   Clone the full repo to use this feature.")
+        return 1
+
+    port = args.port or 5000
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+
+    safe_print(f"[OK] Starting dashboard on http://127.0.0.1:{port}")
+
+    try:
+        import webbrowser
+        import time
+        proc = subprocess.Popen(
+            [sys.executable, str(monitor_path), "--port", str(port)],
+            env=env,
+        )
+        time.sleep(1.5)
+        webbrowser.open(f"http://127.0.0.1:{port}")
+        proc.wait()
+    except KeyboardInterrupt:
+        safe_print("\n[OK] Dashboard stopped.")
+    return 0
+
+
+def cmd_daemon(args):
+    """Manage the daemon (install/start/stop/status) via launcher.py."""
+    launcher_path = Path(__file__).parent / "daemon" / "launcher.py"
+    if not launcher_path.exists():
+        launcher_path = Path.home() / ".super_memory" / "daemon" / "launcher.py"
+
+    action = args.action or "status"
+
+    if not launcher_path.exists():
+        # Fallback: handle basic actions inline
+        if action == "status":
+            return cmd_status(args)
+        elif action == "start":
+            return cmd_start(args)
+        elif action == "stop":
+            return cmd_stop(args)
+        else:
+            safe_print("[X] daemon/launcher.py not found.")
+            return 1
+
+    import subprocess
+    result = subprocess.run(
+        [sys.executable, str(launcher_path), action],
+        check=False
+    )
+    return result.returncode
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -997,7 +1195,14 @@ def main():
     subparsers.add_parser('summary', help='Memory summary')
     subparsers.add_parser('context', help='AI context')
     subparsers.add_parser('tokens', help='Token usage summary')
-    
+
+    p_delete = subparsers.add_parser('delete', help='Delete memory entry by ID')
+    p_delete.add_argument('id', type=int, help='Memory entry ID')
+
+    p_edit = subparsers.add_parser('edit', help='Edit memory entry by ID')
+    p_edit.add_argument('id', type=int, help='Memory entry ID')
+    p_edit.add_argument('text', nargs='+', help='New text')
+
     # Agent commands
     subparsers.add_parser('status', help='Check agent status')
     subparsers.add_parser('start', help='Start agent')
@@ -1054,8 +1259,25 @@ def main():
 
     subparsers.add_parser('help', help='Show help')
 
-    # Interactive mode option
+    # Interactive shell
     p_shell = subparsers.add_parser('shell', help='Interactive shell')
+
+    # Unified CLI additions
+    p_inject = subparsers.add_parser('inject', help='Inject memory context into a prompt')
+    p_inject.add_argument('prompt', nargs='?', help='Prompt text')
+    p_inject.add_argument('--file', '-f', help='Read prompt from file')
+    p_inject.add_argument('--stdin', action='store_true', help='Read prompt from stdin')
+    p_inject.add_argument('--prefix', '-p', help='Text to prepend before context')
+    p_inject.add_argument('--suffix', '-s', help='Text to append after prompt')
+    p_inject.add_argument('--summary', action='store_true', help='Include memory summary')
+
+    p_monitor = subparsers.add_parser('monitor', help='Start web dashboard')
+    p_monitor.add_argument('--port', type=int, default=5000, help='Dashboard port')
+
+    p_daemon = subparsers.add_parser('daemon', help='Manage daemon (install/start/stop/status)')
+    p_daemon.add_argument('action', nargs='?', default='status',
+                          choices=['install', 'start', 'stop', 'status', 'restart'],
+                          help='Daemon action')
 
     args = parser.parse_args()
 
@@ -1072,6 +1294,8 @@ def main():
         'summary': cmd_summary,
         'context': cmd_context,
         'tokens': cmd_tokens,
+        'delete': cmd_delete,
+        'edit': cmd_edit,
         'status': cmd_status,
         'start': cmd_start,
         'stop': cmd_stop,
@@ -1090,6 +1314,9 @@ def main():
         'agent_select': cmd_agent_select,
         'agent_delete': cmd_agent_delete,
         'agent_info': cmd_agent_info,
+        'inject': cmd_inject,
+        'monitor': cmd_monitor,
+        'daemon': cmd_daemon,
         'help': lambda a: parser.print_help(),
         'shell': cmd_shell
     }
