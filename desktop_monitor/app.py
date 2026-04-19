@@ -273,7 +273,7 @@ def cli_run():
 # ============================================================
 
 async def pty_terminal_handler(websocket):
-    import queue, threading, winpty, os
+    import queue, threading, os, platform
 
     cols, rows = 120, 30
     out_queue = queue.Queue()
@@ -286,12 +286,48 @@ async def pty_terminal_handler(websocket):
         'PATH': os.environ.get('PATH', ''),
     }
 
+    proc = None
+    is_windows = platform.system() == 'Windows'
+
     try:
-        proc = winpty.PtyProcess.spawn(
-            [r'C:\Program Files\Git\usr\bin\bash.exe', '-l'],
-            dimensions=(rows, cols),
-            env=env,
-        )
+        if is_windows:
+            try:
+                import winpty
+                proc = winpty.PtyProcess.spawn(
+                    [r'C:\Program Files\Git\usr\bin\bash.exe', '-l'],
+                    dimensions=(rows, cols),
+                    env=env,
+                )
+            except Exception:
+                import subprocess
+                proc = subprocess.Popen(
+                    ['cmd.exe', '/q'],
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    stdin=subprocess.PIPE,
+                )
+                proc.is_subprocess = True
+        else:
+            import pty
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.execvp('/bin/bash', ['/bin/bash', '-l'])
+            else:
+                class PtyProcess:
+                    def __init__(self, pid, fd):
+                        self.pid = pid
+                        self.fd = fd
+                    def read(self, size):
+                        return os.read(self.fd, size)
+                    def write(self, data):
+                        return os.write(self.fd, data)
+                    def kill(self):
+                        os.kill(self.pid, 9)
+                        os.close(self.fd)
+                    def wait(self):
+                        os.waitpid(self.pid, 0)
+                proc = PtyProcess(pid, fd)
     except Exception as e:
         await websocket.send(f'\r\n\x1b[31mFailed to start shell: {e}\x1b[0m\r\n')
         return
@@ -301,11 +337,27 @@ async def pty_terminal_handler(websocket):
         try:
             while not stop_event.is_set():
                 try:
-                    data = proc.read(4096)
-                    if data:
-                        out_queue.put(data)
+                    if is_windows and hasattr(proc, 'is_subprocess'):
+                        data = proc.stdout.read(4096)
+                        if data:
+                            out_queue.put(data)
+                        else:
+                            break
+                    elif is_windows:
+                        data = proc.read(4096)
+                        if data:
+                            out_queue.put(data)
+                        else:
+                            break
                     else:
-                        break
+                        import select
+                        r, _, _ = select.select([proc.fd], [], [], 0.1)
+                        if r:
+                            data = os.read(proc.fd, 4096)
+                            if data:
+                                out_queue.put(data)
+                            else:
+                                break
                 except Exception:
                     break
         except Exception:
@@ -319,7 +371,11 @@ async def pty_terminal_handler(websocket):
     async def pump_input():
         try:
             async for msg in websocket:
-                proc.write(msg)
+                if is_windows and hasattr(proc, 'is_subprocess'):
+                    proc.stdin.write(msg.encode())
+                    proc.stdin.flush()
+                else:
+                    proc.write(msg)
         except Exception:
             pass
         finally:
@@ -356,6 +412,8 @@ async def pty_terminal_handler(websocket):
         stop_event.set()
         try:
             proc.kill()
+            if not is_windows and hasattr(proc, 'wait'):
+                proc.wait()
         except Exception:
             pass
 

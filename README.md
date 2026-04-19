@@ -12,10 +12,10 @@ Claude Code ✓    OpenClaw ✓    Codex ✓    Cursor ✓    Any AI Agent ✓
 
 ```bash
 # One command install:
-curl -fsSL https://raw.githubusercontent.com/YOUR_REPO/super-memory/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/k6bdptd77n-arch/gigaprompt/main/install.sh | bash
 
 # Or manual:
-git clone https://github.com/YOUR_REPO/super-memory.git ~/.super_memory
+git clone https://github.com/k6bdptd77n-arch/gigaprompt.git ~/.super_memory
 cd ~/.super_memory && python3 mem install
 
 # Start using:
@@ -30,15 +30,19 @@ mem status
 ### Universal Memory API
 REST API that any AI agent can query:
 ```
-GET  /health       — Check status
-GET  /summary      — Memory stats
-GET  /recent       — Recent entries
-GET  /search?q=    — Search
-GET  /context      — AI context (for prompts)
-POST /add          — Add entry
-POST /add_completed — Mark task done
-POST /add_decision  — Add decision
-POST /add_blocker  — Add blocker
+GET  /health              — Check status
+GET  /summary             — Memory stats
+GET  /recent              — Recent entries
+GET  /search?q=           — Search
+GET  /context             — AI context (for prompts)
+GET  /tokens/summary     — Token usage summary
+GET  /tokens/daily        — Daily cost breakdown
+GET  /tokens/recent       — Recent token log entries
+POST /add                 — Add entry
+POST /add_completed       — Mark task done
+POST /add_decision        — Add decision
+POST /add_blocker         — Add blocker
+POST /log_tokens          — Log token usage
 ```
 
 ### CLI Commands
@@ -51,6 +55,7 @@ mem search "query"       # Search
 mem recent               # Recent entries
 mem summary              # Stats
 mem context              # AI context
+mem tokens               # Token usage summary
 mem status               # Check agent
 mem start                # Start agent
 mem stop                 # Stop agent
@@ -62,16 +67,25 @@ mem install              # Install + auto-start
 - **Background process** (fallback)
 - Starts automatically on boot
 
-### Works With Everything
+### Desktop Monitor (Optional)
+Web-based dashboard with PTY terminal:
 ```bash
-# Claude Code
-cat file.py | mem context
+cd desktop_monitor
+pip install -r requirements.txt
+python app.py
+# Opens http://127.0.0.1:5000
+```
 
-# OpenClaw
-mem context | openai -p "review this"
+### Token Tracking
+Track Claude API usage and costs:
+```bash
+# Log tokens manually
+curl -X POST http://localhost:8080/log_tokens \
+  -H "Content-Type: application/json" \
+  -d '{"model":"claude-opus-4-6","usage":{"input_tokens":1000,"output_tokens":500}}'
 
-# Any AI
-curl http://localhost:8080/context
+# Or use the wrapper
+SUPER_MEMORY_API=http://127.0.0.1:8080 python token_log.py curl ...
 ```
 
 ---
@@ -116,6 +130,7 @@ mem blocked "Deploy" --blocker "Waiting for CI"
 
 # End of day
 mem summary          # What did I accomplish?
+mem tokens           # How much did I spend?
 ```
 
 ### AI Integration
@@ -128,15 +143,12 @@ cat /tmp/memory.txt code.py | claude
 claude "Review $(mem context) code.py"
 ```
 
-### In Scripts
+### Token Tracking in Scripts
 ```bash
 #!/bin/bash
-# Post-deploy hook
-mem done "Deployed v1.2.3"
-
-#!/bin/bash
-# Git commit hook
-mem add "Git: $(git log -1 --oneline)"
+# Post-api-call hook
+python token_log.py curl -X POST https://api.anthropic.com/... \
+  -H "x-api-key: $ANTHROPIC_API_KEY" ...
 ```
 
 ---
@@ -160,11 +172,15 @@ mem add "Git: $(git log -1 --oneline)"
 ### Files
 ```
 ~/.super_memory/
-├── memory_agent.py    # REST API daemon
-├── mem                # CLI tool
+├── memory_agent.py     # REST API daemon
+├── mem                 # CLI tool
+├── token_log.py        # Token usage logger
+├── hook.sh            # Bash hook (optional)
+├── context_inject.py  # Prompt injector
 ├── launcher.py        # Auto-start manager
-├── hook.sh           # Bash hook (optional)
-├── context_inject.py # Prompt injector
+├── desktop_monitor/   # Web dashboard (optional)
+│   ├── app.py         # Flask + WebSocket PTY
+│   └── templates/     # HTML templates
 ├── daemon/
 │   └── super-memory.service  # systemd unit
 └── memory.db          # SQLite database
@@ -177,7 +193,6 @@ mem add "Git: $(git log -1 --oneline)"
 ### Environment Variables
 ```bash
 SUPER_MEMORY_API=http://127.0.0.1:8080  # API URL
-SUPER_MEMORY_ENABLE=1                      # Enable hook
 ```
 
 ### Port

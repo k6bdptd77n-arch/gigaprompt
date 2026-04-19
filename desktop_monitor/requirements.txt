@@ -1,4 +1,5 @@
 flask>=3.0.0
 requests>=2.31.0
-pywinpty>=1.1.0
 websockets>=12.0
+# pywinpty is optional for Windows PTY support
+# On Linux/macOS, pty module from stdlib is used

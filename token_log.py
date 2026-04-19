@@ -68,7 +68,7 @@ def log_tokens(model: str, usage: dict, source: str = "curl"):
     with open(TOKEN_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-    # Send to Super Memory API
+    # Send to Super Memory API (optional - local log always saved)
     try:
         req = urllib.request.Request(
             f"{SUPER_MEMORY_API}/log_tokens",
@@ -76,9 +76,15 @@ def log_tokens(model: str, usage: dict, source: str = "curl"):
             headers={"Content-Type": "application/json"},
             method="POST"
         )
-        urllib.request.urlopen(req, timeout=3)
-    except Exception:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                return entry  # Successfully logged to API
+    except urllib.error.URLError as e:
+        # Silently ignore if agent not running - local log is sufficient
         pass
+    except Exception:
+        # Log errors to stderr for debugging but don't fail
+        print(f"[Super Memory] Warning: Could not reach API at {SUPER_MEMORY_API}", file=sys.stderr)
 
     return entry
 
