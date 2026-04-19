@@ -4,7 +4,7 @@
 # One-command install for universal memory that works with ANY AI agent
 #
 # Usage:
-#   curl -fsSL https://.../install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/k6bdptd77n-arch/gigaprompt/main/install.sh | bash
 #
 # After install, works with:
 #   - Claude Code
@@ -17,7 +17,8 @@ set -e
 
 # Configuration
 INSTALL_DIR="${HOME}/.super_memory"
-REPO_URL="${REPO_URL:-https://github.com/YOUR_REPO/super-memory}"
+REPO_URL="https://github.com/k6bdptd77n-arch/gigaprompt.git"
+GITHUB_RAW="https://raw.githubusercontent.com/k6bdptd77n-arch/gigaprompt/main"
 
 # Colors
 RED='\033[0;31m'
@@ -56,67 +57,90 @@ create_dir() {
     echo "  ✅ $INSTALL_DIR"
 }
 
-# Install Python dependencies
-install_deps() {
-    echo -e "${YELLOW}Installing dependencies...${NC}"
-    
-    # requests is usually built-in, but just in case
-    python3 -c "import requests" 2>/dev/null || \
-        pip3 install requests --quiet 2>/dev/null || \
-        python3 -m pip install requests --quiet 2>/dev/null
-    
-    echo "  ✅ requests (Python)"
+# Download a file from GitHub
+download_file() {
+    local file="$1"
+    local url="${GITHUB_RAW}/${file}"
+    echo "  📥 Downloading $file..."
+    if curl -fsSL "$url" -o "$INSTALL_DIR/$file"; then
+        echo "  ✅ $file"
+        return 0
+    else
+        echo "  ❌ Failed to download $file"
+        return 1
+    fi
 }
 
-# Install files
+# Install Python dependencies
+install_deps() {
+    echo -e "${YELLOW}Checking dependencies...${NC}"
+    
+    # Check required Python modules
+    python3 -c "import http.server" 2>/dev/null && echo "  ✅ http.server (stdlib)" || echo "  ⚠️  http.server missing"
+    python3 -c "import sqlite3" 2>/dev/null && echo "  ✅ sqlite3 (stdlib)" || echo "  ⚠️  sqlite3 missing"
+    python3 -c "import json" 2>/dev/null && echo "  ✅ json (stdlib)" || echo "  ⚠️  json missing"
+    python3 -c "import os" 2>/dev/null && echo "  ✅ os (stdlib)" || echo "  ⚠️  os missing"
+    
+    echo "  ✅ All required modules available (stdlib)"
+}
+
+# Download and install files
 install_files() {
     echo -e "${YELLOW}Installing files...${NC}"
     
-    # Copy files
-    if [ -f "$(dirname $0)/memory_agent.py" ]; then
-        cp "$(dirname $0)/memory_agent.py" "$INSTALL_DIR/"
-        echo "  ✅ memory_agent.py"
-    fi
+    # Core files (required)
+    download_file "memory_agent.py" || exit 1
     
-    if [ -f "$(dirname $0)/hook.sh" ]; then
-        cp "$(dirname $0)/hook.sh" "$INSTALL_DIR/"
-        echo "  ✅ hook.sh"
-    fi
+    # CLI (required)
+    download_file "mem" || exit 1
     
-    if [ -f "$(dirname $0)/context_inject.py" ]; then
-        cp "$(dirname $0)/context_inject.py" "$INSTALL_DIR/"
-        echo "  ✅ context_inject.py"
-    fi
+    # Optional but useful
+    download_file "hook.sh" && chmod +x "$INSTALL_DIR/hook.sh"
+    download_file "context_inject.py" && chmod +x "$INSTALL_DIR/context_inject.py"
+    download_file "token_log.py" && chmod +x "$INSTALL_DIR/token_log.py"
     
-    # Make executable
+    # Daemon files
+    mkdir -p "$INSTALL_DIR/daemon"
+    curl -fsSL "${GITHUB_RAW}/daemon/launcher.py" -o "$INSTALL_DIR/daemon/launcher.py" 2>/dev/null && chmod +x "$INSTALL_DIR/daemon/launcher.py" && echo "  ✅ daemon/launcher.py" || true
+    curl -fsSL "${GITHUB_RAW}/daemon/super-memory.service" -o "$INSTALL_DIR/daemon/super-memory.service" 2>/dev/null && echo "  ✅ daemon/super-memory.service" || true
+    
+    # Make core files executable
     chmod +x "$INSTALL_DIR/memory_agent.py"
-    chmod +x "$INSTALL_DIR/context_inject.py"
+    chmod +x "$INSTALL_DIR/mem"
 }
 
-# Configure bashrc
-configure_bashrc() {
+# Configure shell
+configure_shell() {
     echo -e "${YELLOW}Configuring shell...${NC}"
     
-    HOOK_LINE="[ -f ${INSTALL_DIR}/hook.sh ] && source ${INSTALL_DIR}/hook.sh"
+    # For curl-based install, we need to set PATH or alias
+    # Since hook.sh needs sourcing, provide both options
+    
+    # Option 1: Alias that sources hook
+    MEM_ALIAS="alias mem='source ${INSTALL_DIR}/hook.sh'"
+    
+    # Option 2: Direct PATH to mem
+    MEM_PATH="export PATH=\"\${PATH}:${INSTALL_DIR}\""
     
     # Check if already configured
-    if grep -q "super_memory/hook.sh" ~/.bashrc 2>/dev/null; then
+    if grep -q "super_memory/hook.sh\|super_memory/mem" ~/.bashrc 2>/dev/null; then
         echo "  ✅ Already configured in ~/.bashrc"
     else
         echo "" >> ~/.bashrc
         echo "# Super Memory — Universal AI Memory" >> ~/.bashrc
-        echo "$HOOK_LINE" >> ~/.bashrc
+        echo "$MEM_PATH" >> ~/.bashrc
+        echo "$MEM_ALIAS" >> ~/.bashrc
         echo "  ✅ Added to ~/.bashrc"
     fi
     
-    # Add alias for quick access
-    ALIAS_LINE="alias mem='source ${INSTALL_DIR}/hook.sh && mem'"
-    
-    if grep -q "alias mem=" ~/.bashrc 2>/dev/null; then
-        echo "  ✅ Alias already configured"
-    else
-        echo "$ALIAS_LINE" >> ~/.bashrc
-        echo "  ✅ Added alias: mem"
+    # Also check ~/.profile for ssh sessions
+    if [ -f ~/.profile ]; then
+        if ! grep -q "super_memory/mem" ~/.profile 2>/dev/null; then
+            echo "" >> ~/.profile
+            echo "# Super Memory" >> ~/.profile
+            echo "export PATH=\"\${PATH}:${INSTALL_DIR}\"" >> ~/.profile
+            echo "  ✅ Also added to ~/.profile"
+        fi
     fi
 }
 
@@ -148,7 +172,9 @@ verify() {
     
     # Check files
     echo "  📁 Files:"
-    ls -la "$INSTALL_DIR/"*.py "$INSTALL_DIR/"*.sh 2>/dev/null | wc -l | xargs -I{} echo "     {} files installed"
+    count=$(ls "$INSTALL_DIR/"*.py "$INSTALL_DIR/"*.sh 2>/dev/null | wc -l | tr -d ' ')
+    echo "     $count files installed"
+    ls -la "$INSTALL_DIR/"
     
     # Check API
     echo "  🌐 API:"
@@ -160,15 +186,15 @@ verify() {
         TOTAL=$(echo "$STATS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total','?'))" 2>/dev/null || echo "?")
         echo "     📊 Total entries: $TOTAL"
     else
-        echo "     ⚠️  Agent not responding (run: mem agent)"
+        echo "     ⚠️  Agent not responding (run: python3 $INSTALL_DIR/mem start)"
     fi
     
-    # Check hook
-    echo "  🔗 Hook:"
-    if grep -q "super_memory/hook.sh" ~/.bashrc 2>/dev/null; then
-        echo "     ✅ Shell hook configured"
+    # Check CLI
+    echo "  🔗 CLI:"
+    if "$INSTALL_DIR/mem" status 2>/dev/null; then
+        echo "     ✅ mem CLI working"
     else
-        echo "     ⚠️  Shell hook not configured"
+        echo "     ⚠️  mem CLI needs restart (source ~/.bashrc)"
     fi
 }
 
@@ -178,7 +204,7 @@ main() {
     create_dir
     install_deps
     install_files
-    configure_bashrc
+    configure_shell
     start_agent
     verify
     
@@ -188,20 +214,20 @@ main() {
     echo -e "${GREEN}╚════════════════════════════════════════════════╝${NC}"
     echo ""
     echo "Quick start:"
-    echo "  1. Restart terminal or run: source ~/.bashrc"
+    echo "  1. Restart terminal OR run: source ~/.bashrc"
     echo ""
     echo "  2. Start using:"
     echo "     mem add \"Сделал что-то\"       — Add to memory"
     echo "     mem done \"Task name\"         — Mark completed"
     echo "     mem search \"query\"           — Search"
     echo "     mem summary                  — Show summary"
+    echo "     mem tokens                   — Token usage"
     echo ""
-    echo "  3. For AI context:"
-    echo "     cat file.py | context_inject.py --prefix 'Review'"
-    echo ""
-    echo "  4. Check status:"
+    echo "  3. Check status:"
     echo "     mem status"
-    echo "     mem agent     — Start agent if not running"
+    echo "     mem start    — Start agent if not running"
+    echo ""
+    echo "Install location: $INSTALL_DIR"
     echo ""
 }
 
