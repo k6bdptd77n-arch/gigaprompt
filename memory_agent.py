@@ -59,7 +59,7 @@ def load_config() -> dict:
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except (json.JSONDecodeError, OSError):
             pass
     return {}
 
@@ -331,52 +331,66 @@ class MemoryHandler(BaseHTTPRequestHandler):
             self.send_json({'status': 'ok', 'db': str(DB_PATH)})
         
         elif path == '/summary':
+            active = get_active_agent()
             cursor = conn.execute("""
-                SELECT type, COUNT(*) as count FROM memories GROUP BY type
-            """)
+                SELECT type, COUNT(*) as count FROM memories
+                WHERE agent_id = ? GROUP BY type
+            """, (active,))
             counts = {row['type']: row['count'] for row in cursor.fetchall()}
-            cursor = conn.execute("SELECT COUNT(*) as total FROM memories")
+            cursor = conn.execute(
+                "SELECT COUNT(*) as total FROM memories WHERE agent_id = ?", (active,)
+            )
             total = cursor.fetchone()['total']
             self.send_json({
                 'total': total,
                 'completed': counts.get('completed', 0),
                 'decisions': counts.get('decision', 0),
                 'blockers': counts.get('blocker', 0),
-                'learnings': counts.get('learning', 0)
+                'learnings': counts.get('learning', 0),
+                'active_agent': active,
             })
-        
+
         elif path == '/recent':
+            active = get_active_agent()
+            qs = parse_qs(parsed.query)
+            limit = min(int(qs.get('limit', ['10'])[0]), 100)
+            offset = int(qs.get('offset', ['0'])[0])
             cursor = conn.execute(
-                "SELECT * FROM memories ORDER BY id DESC LIMIT 10"
+                "SELECT * FROM memories WHERE agent_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+                (active, limit, offset)
             )
             rows = [dict(row) for row in cursor.fetchall()]
-            self.send_json({'memories': rows})
-        
+            self.send_json({'memories': rows, 'agent': active})
+
         elif path.startswith('/search'):
+            active = get_active_agent()
             query = parse_qs(parsed.query).get('q', [''])[0]
             if query:
                 cursor = conn.execute("""
-                    SELECT * FROM memories 
-                    WHERE search_text LIKE ? OR text LIKE ?
+                    SELECT * FROM memories
+                    WHERE agent_id = ?
+                      AND (search_text LIKE ? OR text LIKE ?)
                     ORDER BY id DESC LIMIT 20
-                """, (f'%{query.lower()}%', f'%{query.lower()}%'))
+                """, (active, f'%{query.lower()}%', f'%{query.lower()}%'))
                 rows = [dict(row) for row in cursor.fetchall()]
-                self.send_json({'results': rows, 'query': query})
+                self.send_json({'results': rows, 'query': query, 'agent': active})
             else:
                 self.send_json({'results': [], 'query': ''})
-        
+
         elif path == '/context':
+            active = get_active_agent()
             cursor = conn.execute("""
                 SELECT text, type, timestamp FROM memories
+                WHERE agent_id = ?
                 ORDER BY id DESC LIMIT 20
-            """)
+            """, (active,))
             rows = cursor.fetchall()
 
             completed = [dict(r) for r in rows if r['type'] == 'completed'][:5]
             decisions = [dict(r) for r in rows if r['type'] == 'decision'][:3]
             blockers = [dict(r) for r in rows if r['type'] == 'blocker'][:2]
 
-            context = "## Recent Memory Context\n\n"
+            context = f"## Recent Memory Context (agent: {active})\n\n"
 
             if completed:
                 context += "### Completed Tasks:\n"
@@ -395,7 +409,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 for m in blockers:
                     context += f"- {m['text'][:100]}\n"
 
-            self.send_json({'context': context})
+            self.send_json({'context': context, 'agent': active})
 
         elif path == '/tokens' or path == '/tokens/summary':
             summary = get_token_summary()
@@ -674,88 +688,92 @@ class MemoryHandler(BaseHTTPRequestHandler):
             entry_type = data.get('type', 'general')
             source = data.get('source', 'api')
             metadata = data.get('metadata', {})
-            
+            agent_id = data.get('agent_id') or get_active_agent()
+
             if text:
                 timestamp = datetime.now().isoformat()
                 conn.execute("""
-                    INSERT INTO memories (text, type, timestamp, source, metadata, search_text)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (text, entry_type, timestamp, source, 
+                    INSERT INTO memories (text, type, timestamp, source, metadata, search_text, agent_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (text, entry_type, timestamp, source,
                       json.dumps(metadata, ensure_ascii=False),
-                      prepare_search_text(text)))
+                      prepare_search_text(text), agent_id))
                 conn.commit()
-                
+
                 cursor = conn.execute("SELECT last_insert_rowid() as id")
                 row_id = cursor.fetchone()['id']
-                self.send_json({'success': True, 'id': row_id})
+                self.send_json({'success': True, 'id': row_id, 'agent': agent_id})
             else:
                 self.send_json({'error': 'text required'}, 400)
-        
+
         elif path == '/add_completed':
             task = data.get('task', '')
             result = data.get('result', '')
             artifacts = data.get('artifacts', [])
-            
+            agent_id = data.get('agent_id') or get_active_agent()
+
             text = f"✅ {task}"
             if result:
                 text += f"\nResult: {result}"
             if artifacts:
                 text += f"\nArtifacts: {', '.join(artifacts)}"
-            
+
             timestamp = datetime.now().isoformat()
             metadata = {'task': task, 'result': result, 'artifacts': artifacts}
-            
+
             conn.execute("""
-                INSERT INTO memories (text, type, timestamp, source, metadata, search_text)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (text, 'completed', timestamp, 'api',
+                INSERT INTO memories (text, type, timestamp, source, metadata, search_text, agent_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (text, 'completed', timestamp, data.get('source', 'api'),
                   json.dumps(metadata, ensure_ascii=False),
-                  prepare_search_text(text)))
+                  prepare_search_text(text), agent_id))
             conn.commit()
-            
-            self.send_json({'success': True})
-        
+
+            self.send_json({'success': True, 'agent': agent_id})
+
         elif path == '/add_decision':
             topic = data.get('topic', '')
             decision = data.get('decision', '')
             reason = data.get('reason', '')
-            
+            agent_id = data.get('agent_id') or get_active_agent()
+
             text = f"⚖️ Decision: {topic}\n→ {decision}"
             if reason:
                 text += f"\nWhy: {reason}"
-            
+
             timestamp = datetime.now().isoformat()
             metadata = {'topic': topic, 'decision': decision, 'reason': reason}
-            
+
             conn.execute("""
-                INSERT INTO memories (text, type, timestamp, source, metadata, search_text)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (text, 'decision', timestamp, 'api',
+                INSERT INTO memories (text, type, timestamp, source, metadata, search_text, agent_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (text, 'decision', timestamp, data.get('source', 'api'),
                   json.dumps(metadata, ensure_ascii=False),
-                  prepare_search_text(text)))
+                  prepare_search_text(text), agent_id))
             conn.commit()
-            
-            self.send_json({'success': True})
-        
+
+            self.send_json({'success': True, 'agent': agent_id})
+
         elif path == '/add_blocker':
             task = data.get('task', '')
             blocker = data.get('blocker', '')
             needed = data.get('needed', '')
-            
+            agent_id = data.get('agent_id') or get_active_agent()
+
             text = f"🚧 Blocked: {task}\nBlocker: {blocker}\nNeeded: {needed}"
-            
+
             timestamp = datetime.now().isoformat()
             metadata = {'task': task, 'blocker': blocker, 'needed': needed}
-            
+
             conn.execute("""
-                INSERT INTO memories (text, type, timestamp, source, metadata, search_text)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (text, 'blocker', timestamp, 'api',
+                INSERT INTO memories (text, type, timestamp, source, metadata, search_text, agent_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (text, 'blocker', timestamp, data.get('source', 'api'),
                   json.dumps(metadata, ensure_ascii=False),
-                  prepare_search_text(text)))
+                  prepare_search_text(text), agent_id))
             conn.commit()
-            
-            self.send_json({'success': True})
+
+            self.send_json({'success': True, 'agent': agent_id})
 
         elif path == '/log_tokens':
             model = data.get('model', 'claude-opus-4-6')
@@ -769,89 +787,86 @@ class MemoryHandler(BaseHTTPRequestHandler):
         # ============================================================
         
         elif path == '/files/add' or path == '/files/update':
-            # Add or update file info
             filepath = data.get('filepath', '')
             purpose = data.get('purpose', '')
             description = data.get('description', '')
             decisions = data.get('decisions', [])
             patterns = data.get('patterns', [])
-            
+            agent_id = data.get('agent_id') or get_active_agent()
+
             if not filepath:
                 self.send_json({'error': 'filepath required'}, 400)
                 conn.close()
                 return
-            
+
             now = datetime.now().isoformat()
             filename = Path(filepath).name
             extension = Path(filepath).suffix
-            
-            # Try to update existing or insert new
+            search_text = prepare_search_text(
+                f"{filepath} {purpose} {description} {' '.join(patterns)}"
+            )
+
             cursor = conn.execute("SELECT id FROM files WHERE filepath = ?", (filepath,))
             existing = cursor.fetchone()
-            
+
             if existing:
                 conn.execute("""
                     UPDATE files SET
-                        purpose = ?,
-                        description = ?,
-                        decisions = ?,
-                        patterns = ?,
-                        updated_at = ?,
-                        search_text = ?
+                        purpose = ?, description = ?, decisions = ?,
+                        patterns = ?, updated_at = ?, search_text = ?, agent_id = ?
                     WHERE filepath = ?
                 """, (purpose, description, json.dumps(decisions), json.dumps(patterns),
-                      now, prepare_search_text(f"{filepath} {purpose} {description} {' '.join(patterns)}"),
-                      filepath))
+                      now, search_text, agent_id, filepath))
             else:
                 conn.execute("""
-                    INSERT INTO files (filepath, filename, extension, purpose, description, 
-                                     decisions, patterns, created_at, updated_at, search_text)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO files
+                        (filepath, filename, extension, purpose, description,
+                         decisions, patterns, created_at, updated_at, search_text, agent_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (filepath, filename, extension, purpose, description,
                       json.dumps(decisions), json.dumps(patterns),
-                      now, now, prepare_search_text(f"{filepath} {purpose} {description} {' '.join(patterns)}")))
-            
+                      now, now, search_text, agent_id))
+
             conn.commit()
-            self.send_json({'success': True, 'filepath': filepath})
+            self.send_json({'success': True, 'filepath': filepath, 'agent': agent_id})
         
         elif path == '/folders/add' or path == '/folders/update':
             folder_path = data.get('path', '')
             purpose = data.get('purpose', '')
             description = data.get('description', '')
             blockers = data.get('blockers', [])
-            
+            agent_id = data.get('agent_id') or get_active_agent()
+
             if not folder_path:
                 self.send_json({'error': 'path required'}, 400)
                 conn.close()
                 return
-            
+
             now = datetime.now().isoformat()
             name = Path(folder_path).name
-            
+            search_text = prepare_search_text(f"{folder_path} {purpose} {description}")
+
             cursor = conn.execute("SELECT id FROM folders WHERE path = ?", (folder_path,))
             existing = cursor.fetchone()
-            
+
             if existing:
                 conn.execute("""
                     UPDATE folders SET
-                        purpose = ?,
-                        description = ?,
-                        blockers = ?,
-                        updated_at = ?,
-                        search_text = ?
+                        purpose = ?, description = ?, blockers = ?,
+                        updated_at = ?, search_text = ?, agent_id = ?
                     WHERE path = ?
-                """, (purpose, description, json.dumps(blockers), now,
-                      prepare_search_text(f"{folder_path} {purpose} {description}"),
-                      folder_path))
+                """, (purpose, description, json.dumps(blockers),
+                      now, search_text, agent_id, folder_path))
             else:
                 conn.execute("""
-                    INSERT INTO folders (path, name, purpose, description, blockers, created_at, updated_at, search_text)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO folders
+                        (path, name, purpose, description, blockers, created_at, updated_at, search_text, agent_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (folder_path, name, purpose, description, json.dumps(blockers),
-                      now, now, prepare_search_text(f"{folder_path} {purpose} {description}")))
-            
+                      now, now, search_text, agent_id))
+
             conn.commit()
-            self.send_json({'success': True, 'path': folder_path})
+            self.send_json({'success': True, 'path': folder_path, 'agent': agent_id})
         
         elif path == '/projects/add' or path == '/projects/update':
             name = data.get('name', '')
@@ -917,7 +932,44 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 self.send_json({'success': True, 'deleted': name})
             else:
                 self.send_json({'error': 'name required'}, 400)
-        
+
+        # ============================================================
+        # MEMORY CRUD — delete and edit individual entries
+        # ============================================================
+
+        elif path == '/memories/delete':
+            mem_id = data.get('id')
+            if not mem_id:
+                self.send_json({'error': 'id required'}, 400)
+                conn.close()
+                return
+            cursor = conn.execute("SELECT id FROM memories WHERE id = ?", (mem_id,))
+            if not cursor.fetchone():
+                self.send_json({'error': 'Memory not found'}, 404)
+                conn.close()
+                return
+            conn.execute("DELETE FROM memories WHERE id = ?", (mem_id,))
+            conn.commit()
+            self.send_json({'success': True, 'deleted': mem_id})
+
+        elif path == '/memories/edit':
+            mem_id = data.get('id')
+            new_text = data.get('text', '').strip()
+            if not mem_id or not new_text:
+                self.send_json({'error': 'id and text required'}, 400)
+                conn.close()
+                return
+            cursor = conn.execute("SELECT id FROM memories WHERE id = ?", (mem_id,))
+            if not cursor.fetchone():
+                self.send_json({'error': 'Memory not found'}, 404)
+                conn.close()
+                return
+            conn.execute("""
+                UPDATE memories SET text = ?, search_text = ? WHERE id = ?
+            """, (new_text, prepare_search_text(new_text), mem_id))
+            conn.commit()
+            self.send_json({'success': True, 'id': mem_id})
+
         else:
             self.send_json({'error': 'Not found'}, 404)
 
