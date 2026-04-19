@@ -28,7 +28,7 @@ def get_context(api_url: str, limit: int = 10) -> str:
         if resp.status_code == 200:
             return resp.json().get('context', '')
         return ''
-    except:
+    except (requests.RequestException, ValueError):
         return ''
 
 
@@ -43,7 +43,7 @@ def get_summary(api_url: str) -> str:
   ⚖️ Decisions: {data.get('decisions', 0)}
   🚧 Blockers: {data.get('blockers', 0)}"""
         return ''
-    except:
+    except (requests.RequestException, ValueError):
         return ''
 
 
