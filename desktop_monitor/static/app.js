@@ -120,12 +120,14 @@
     contextEl.innerHTML = skeleton(4);
     try {
       const data = await api.get('/api/project/summary');
+      const totals = data.totals || {};
+      const totalCount = Object.values(totals).reduce((s, v) => s + (Array.isArray(v) ? v.length : 0), 0);
       statsEl.innerHTML = `
-        <div class="stat"><div class="stat-value">${data.total || 0}</div><div class="stat-label">Entries</div></div>
-        <div class="stat"><div class="stat-value">${data.completed || 0}</div><div class="stat-label">Completed</div></div>
-        <div class="stat"><div class="stat-value">${data.decisions || 0}</div><div class="stat-label">Decisions</div></div>
-        <div class="stat"><div class="stat-value">${data.blockers || 0}</div><div class="stat-label">Blockers</div></div>`;
-      summaryEl.textContent = data.text || '(empty)';
+        <div class="stat"><div class="stat-value">${totalCount}</div><div class="stat-label">Entries</div></div>
+        <div class="stat"><div class="stat-value">${(data.completed || []).length}</div><div class="stat-label">Completed</div></div>
+        <div class="stat"><div class="stat-value">${(data.decisions || []).length}</div><div class="stat-label">Decisions</div></div>
+        <div class="stat"><div class="stat-value">${(data.blockers || []).length}</div><div class="stat-label">Blockers</div></div>`;
+      summaryEl.textContent = data.context || '(no context)';
       contextEl.textContent = data.context || '(no context)';
     } catch (e) {
       summaryEl.textContent = 'Error: ' + e.message;
@@ -141,7 +143,7 @@
     list.innerHTML = skeleton(5);
     try {
       const data = await api.proxyGet('recent', { limit: 50 });
-      const items = data.items || data.recent || [];
+      const items = data.memories || data.items || data.recent || [];
       if (!items.length) { list.innerHTML = '<div class="card">Пусто.</div>'; return; }
       list.innerHTML = items.map(it => `
         <div class="entry">
@@ -293,23 +295,23 @@
     try {
       const s = await api.get('/api/tokens/summary');
       sumEl.innerHTML = `
-        <div class="stat"><div class="stat-value">${(s.total_input || 0).toLocaleString()}</div><div class="stat-label">Input</div></div>
-        <div class="stat"><div class="stat-value">${(s.total_output || 0).toLocaleString()}</div><div class="stat-label">Output</div></div>
-        <div class="stat"><div class="stat-value">$${(s.total_cost || 0).toFixed(2)}</div><div class="stat-label">Spent</div></div>
-        <div class="stat"><div class="stat-value">$${(s.cache_savings || 0).toFixed(2)}</div><div class="stat-label">Cache saved</div></div>`;
+        <div class="stat"><div class="stat-value">${(s.total_input_tokens || 0).toLocaleString()}</div><div class="stat-label">Input</div></div>
+        <div class="stat"><div class="stat-value">${(s.total_output_tokens || 0).toLocaleString()}</div><div class="stat-label">Output</div></div>
+        <div class="stat"><div class="stat-value">$${(s.total_cost_usd || 0).toFixed(2)}</div><div class="stat-label">Spent</div></div>
+        <div class="stat"><div class="stat-value">$${(s.total_cache_savings_usd || 0).toFixed(2)}</div><div class="stat-label">Cache saved</div></div>`;
     } catch (e) { sumEl.textContent = 'Ошибка: ' + e.message; }
     try {
       const d = await api.proxyGet('tokens_daily');
-      const days = d.days || d.items || [];
+      const days = Object.entries(d.daily || {}).map(([date, cost]) => ({ date, cost }));
       dailyEl.innerHTML = days.length
-        ? '<table class="table"><thead><tr><th>Date</th><th>Input</th><th>Output</th><th>Cost</th></tr></thead><tbody>'
-          + days.map(x => `<tr><td>${escapeHtml(x.date)}</td><td>${(x.input || 0).toLocaleString()}</td><td>${(x.output || 0).toLocaleString()}</td><td>$${(x.cost || 0).toFixed(4)}</td></tr>`).join('')
+        ? '<table class="table"><thead><tr><th>Date</th><th>Cost</th></tr></thead><tbody>'
+          + days.map(x => `<tr><td>${escapeHtml(x.date)}</td><td>$${(x.cost || 0).toFixed(4)}</td></tr>`).join('')
           + '</tbody></table>'
         : '<div class="card">Нет данных.</div>';
     } catch (e) { dailyEl.textContent = 'Ошибка: ' + e.message; }
     try {
       const r = await api.get('/api/tokens/recent?limit=20');
-      const items = r.items || [];
+      const items = r.entries || [];
       recentEl.innerHTML = items.length
         ? '<table class="table"><thead><tr><th>Time</th><th>Model</th><th>In</th><th>Out</th><th>Cost</th></tr></thead><tbody>'
           + items.map(x => `<tr><td>${escapeHtml(fmtDate(x.timestamp))}</td><td>${escapeHtml(x.model || '')}</td><td>${x.input_tokens || 0}</td><td>${x.output_tokens || 0}</td><td>$${(x.estimated_cost_usd || 0).toFixed(4)}</td></tr>`).join('')
@@ -348,10 +350,15 @@
     schemaEl.innerHTML = skeleton(3);
     try {
       const s = await api.get('/api/sql/schema');
-      schemaEl.innerHTML = (s.tables || []).map(t => `
-        <div class="entry"><strong>${escapeHtml(t.name)}</strong>
-          <div>${(t.columns || []).map(c => escapeHtml(c.name + ':' + c.type)).join(', ')}</div>
-        </div>`).join('') || '<div class="card">Нет таблиц.</div>';
+      const schemas = s.schemas || [];
+      if (!schemas.length) { schemaEl.innerHTML = '<div class="card">Нет таблиц.</div>'; return; }
+      schemaEl.innerHTML = schemas.map(sql => {
+        const nameMatch = sql.match(/CREATE TABLE\s+(\w+)/i);
+        const name = nameMatch ? nameMatch[1] : 'unknown';
+        const colMatches = [...sql.matchAll(/\n\s+(\w+)\s+\w+/g)];
+        const cols = colMatches.map(m => m[1]).join(', ');
+        return `<div class="entry"><strong>${escapeHtml(name)}</strong><div>${escapeHtml(cols)}</div></div>`;
+      }).join('');
     } catch (e) { schemaEl.textContent = 'Ошибка: ' + e.message; }
   });
 
@@ -368,7 +375,7 @@
       out.innerHTML = '<table class="table"><thead><tr>'
         + cols.map(c => `<th>${escapeHtml(c)}</th>`).join('')
         + '</tr></thead><tbody>'
-        + rows.map(row => '<tr>' + row.map(c => `<td>${escapeHtml(c)}</td>`).join('') + '</tr>').join('')
+        + rows.map(row => '<tr>' + cols.map(c => `<td>${escapeHtml(String(row[c] ?? ''))}</td>`).join('') + '</tr>').join('')
         + '</tbody></table>';
     } catch (e) { out.innerHTML = '<div class="sql-error">' + escapeHtml(e.message) + '</div>'; }
   };
