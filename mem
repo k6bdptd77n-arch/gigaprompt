@@ -1040,6 +1040,516 @@ def cmd_edit(args):
 
 
 # ============================================================
+# INTERACTIVE LAUNCHER  (default when mem is run without args)
+# ============================================================
+
+# ANSI colors — auto-disabled when not a TTY
+_IS_TTY = sys.stdout.isatty()
+
+def _c(code: str, text: str) -> str:
+    if not _IS_TTY:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+def _amber(t):  return _c("33", t)
+def _green(t):  return _c("32", t)
+def _red(t):    return _c("31", t)
+def _cyan(t):   return _c("36", t)
+def _bold(t):   return _c("1",  t)
+def _dim(t):    return _c("2",  t)
+def _purple(t): return _c("35", t)
+
+def _cls():
+    if _IS_TTY:
+        print("\033[2J\033[H", end="")
+
+def _hr(char="─", width=58):
+    safe_print(_dim(char * width))
+
+def _ask(prompt: str, default: str = "") -> str:
+    try:
+        val = input(prompt).strip()
+        return val if val else default
+    except (EOFError, KeyboardInterrupt):
+        return default
+
+def _pick(prompt: str, options: list) -> str:
+    """Show numbered list, return chosen value or empty string."""
+    for i, (label, _) in enumerate(options, 1):
+        safe_print(f"  {_amber(str(i))}.  {label}")
+    choice = _ask(f"\n{prompt} [1-{len(options)}]: ", "")
+    try:
+        idx = int(choice) - 1
+        if 0 <= idx < len(options):
+            return options[idx][1]
+    except (ValueError, IndexError):
+        pass
+    return ""
+
+
+def _header(summary: dict, agent: str, connected: bool):
+    _cls()
+    status = _green("● Connected") if connected else _red("● Offline")
+    total  = summary.get("total", 0)
+    done   = summary.get("completed", 0)
+    dec    = summary.get("decisions", 0)
+    blk    = summary.get("blockers", 0)
+
+    safe_print("")
+    safe_print(_bold("  Super Memory") + "  " + status + "  " + _dim(f"agent: {agent}"))
+    safe_print(_dim(f"  {total} entries  ·  {done} completed  ·  {dec} decisions  ·  {blk} blockers"))
+    safe_print("")
+
+
+def _ensure_agent_running() -> bool:
+    """Start agent if not running. Returns True if running after attempt."""
+    if is_agent_running():
+        return True
+
+    safe_print(_amber("  Agent not running — starting..."))
+
+    if not AGENT_PATH.exists():
+        safe_print(_red(f"  [X] memory_agent.py not found at {AGENT_PATH}"))
+        safe_print(_dim("      Run: mem install"))
+        return False
+
+    import subprocess, time
+    log_path = Path.home() / ".super_memory" / "agent.log"
+    pid_file = Path.home() / ".super_memory" / "agent.pid"
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+
+    proc = subprocess.Popen(
+        [sys.executable, str(AGENT_PATH)],
+        env=env,
+        stdout=open(log_path, "a"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    pid_file.write_text(str(proc.pid))
+
+    for _ in range(12):
+        time.sleep(0.4)
+        if is_agent_running():
+            safe_print(_green(f"  [OK] Started  (PID {proc.pid})"))
+            return True
+
+    safe_print(_red("  [X] Agent started but not responding — check agent.log"))
+    return False
+
+
+# ── Sub-menus ────────────────────────────────────────────────────────────────
+
+def _menu_ai_session(summary: dict, agent: str):
+    """Load context and prepare an AI session."""
+    _cls()
+    safe_print(_bold("\n  AI Session Setup"))
+    _hr()
+
+    ctx_result = api_get("/context")
+    ctx = ctx_result.get("context", "(no context yet)") if "error" not in ctx_result else "(agent unreachable)"
+
+    safe_print(ctx)
+    _hr()
+
+    safe_print(_dim("\n  How to inject this context into Claude:\n"))
+    safe_print(f"  {_amber('Option A')} — CLAUDE.md  (automatic on every session)")
+    safe_print( "    Add to your project's CLAUDE.md:")
+    safe_print(_dim( "      At session start run: mem context"))
+    safe_print(_dim( "      After each task run:  mem done \"what you did\""))
+    safe_print("")
+    safe_print(f"  {_amber('Option B')} — Direct inject")
+    safe_print(_dim( "    mem inject \"your prompt\" | claude"))
+    safe_print(_dim(f"    mem inject --file code.py --prefix \"Review:\""))
+    safe_print("")
+    safe_print(f"  {_amber('Option C')} — Copy context to clipboard")
+
+    # Try clipboard
+    try:
+        import subprocess as sp
+        for clip in ("xclip -selection clipboard", "xsel --clipboard --input", "pbcopy", "clip"):
+            cmd = clip.split()
+            r = sp.run(cmd, input=ctx.encode(), capture_output=True)
+            if r.returncode == 0:
+                safe_print(_green("    [OK] Context copied to clipboard!"))
+                break
+        else:
+            safe_print(_dim("    (clipboard tool not available — copy manually)"))
+    except Exception:
+        safe_print(_dim("    (clipboard tool not available)"))
+
+    safe_print("")
+    _ask(_dim("  [Enter to go back]"))
+
+
+def _menu_quick_add():
+    """Quick memory capture sub-menu."""
+    _cls()
+    safe_print(_bold("\n  Quick Add"))
+    _hr()
+
+    types = [
+        ("General note",   "general"),
+        ("Completed task", "completed"),
+        ("Decision",       "decision"),
+        ("Blocker",        "blocker"),
+        ("Learning",       "learning"),
+    ]
+    chosen_type = _pick("Type", types)
+    if not chosen_type:
+        return
+
+    text = _ask(_amber(f"  {chosen_type.capitalize()}: "))
+    if not text:
+        return
+
+    if chosen_type == "completed":
+        result = api_post("/add_completed", {"task": text, "source": "launch"})
+    elif chosen_type == "decision":
+        reason = _ask(_dim("  Reason (optional): "))
+        result = api_post("/add_decision", {"topic": text, "decision": text, "reason": reason, "source": "launch"})
+    elif chosen_type == "blocker":
+        blocker = _ask(_dim("  What's blocking (optional): "))
+        result = api_post("/add_blocker", {"task": text, "blocker": blocker or "unknown", "needed": "TBD", "source": "launch"})
+    else:
+        result = api_post("/add", {"text": text, "type": chosen_type, "source": "launch"})
+
+    if "error" not in result:
+        safe_print(_green(f"\n  [OK] Saved!"))
+    else:
+        safe_print(_red(f"\n  [X] Error: {result['error']}"))
+
+    import time; time.sleep(0.8)
+
+
+def _menu_select_project() -> str:
+    """List projects + let user pick. Returns chosen project name."""
+    result = api_get("/projects")
+    projects = result.get("projects", []) if "error" not in result else []
+
+    _cls()
+    safe_print(_bold("\n  Select Project"))
+    _hr()
+
+    if not projects:
+        safe_print(_dim("  No projects tracked yet."))
+        safe_print(_dim("  Add one: mem project_add <name> --root /path/to/project"))
+        new_name = _ask(_amber("\n  Create new project (name, or Enter to skip): "))
+        if new_name:
+            root = _ask(_dim(f"  Root path [{Path.cwd()}]: ")) or str(Path.cwd())
+            api_post("/projects/add", {"name": new_name, "root_path": root, "architecture": "", "key_decisions": []})
+            safe_print(_green(f"  [OK] Project '{new_name}' created"))
+            import time; time.sleep(0.8)
+            return new_name
+        return ""
+
+    options = [(f"{p['name']}  {_dim(p.get('root_path',''))}", p['name']) for p in projects]
+    options.append((_dim("[ + Create new project ]"), "__new__"))
+
+    chosen = _pick("Project", options)
+
+    if chosen == "__new__":
+        new_name = _ask(_amber("\n  Project name: "))
+        if new_name:
+            root = _ask(_dim(f"  Root path [{Path.cwd()}]: ")) or str(Path.cwd())
+            api_post("/projects/add", {"name": new_name, "root_path": root, "architecture": "", "key_decisions": []})
+            safe_print(_green(f"  [OK] Project '{new_name}' created"))
+            import time; time.sleep(0.8)
+            return new_name
+        return ""
+
+    return chosen
+
+
+def _menu_select_agent() -> str:
+    """List agents + let user pick. Returns chosen agent name."""
+    result = api_get("/agents")
+    if "error" in result:
+        safe_print(_red("  Cannot reach agent"))
+        return ""
+
+    agents  = result.get("agents", [])
+    active  = result.get("active", "default")
+
+    _cls()
+    safe_print(_bold("\n  Select Agent"))
+    _hr()
+
+    if not agents:
+        safe_print(_dim("  No custom agents. Using 'default'."))
+        _ask(_dim("  [Enter to go back]"))
+        return ""
+
+    options = []
+    for a in agents:
+        marker = _green(" ◀ active") if a['name'] == active else ""
+        label  = f"{a['name']}{marker}  {_dim(a.get('agent_type','?'))}  {_dim(a.get('model',''))}"
+        options.append((label, a['name']))
+
+    options.append((_dim("[ + Add new agent ]"), "__new__"))
+
+    chosen = _pick("Agent", options)
+
+    if chosen == "__new__":
+        name  = _ask(_amber("\n  Agent name: "))
+        atype = _ask(_dim("  Type [claude/openai/gemini] (claude): ")) or "claude"
+        model = _ask(_dim("  Model (claude-sonnet-4-6): ")) or "claude-sonnet-4-6"
+        key   = _ask(_dim("  API key (optional): "))
+        if name:
+            api_post("/agents/add", {"name": name, "type": atype, "model": model, "api_key": key, "api_url": "", "config": {}})
+            safe_print(_green(f"  [OK] Agent '{name}' created"))
+            import time; time.sleep(0.5)
+            return name
+        return ""
+
+    if chosen and chosen != active:
+        api_post("/agents/select", {"name": chosen})
+        safe_print(_green(f"\n  [OK] Switched to agent: {chosen}"))
+        import time; time.sleep(0.7)
+
+    return chosen
+
+
+def _menu_search():
+    """Interactive search."""
+    _cls()
+    safe_print(_bold("\n  Search"))
+    _hr()
+
+    modes = [("Memories", "mem"), ("Files", "files")]
+    mode  = _pick("Search in", modes) or "mem"
+
+    query = _ask(_amber("\n  Query: "))
+    if not query:
+        return
+
+    from urllib.parse import urlencode
+    if mode == "files":
+        r = api_get(f"/files/search?{urlencode({'q': query})}")
+        items = r.get("results", [])
+        if not items:
+            safe_print(_dim("\n  No files found."))
+        else:
+            safe_print(_bold(f"\n  {len(items)} file(s) found:\n"))
+            for f in items[:15]:
+                safe_print(f"  {_cyan(f.get('filepath','?'))}")
+                if f.get("purpose"):
+                    safe_print(_dim(f"    → {f['purpose'][:70]}"))
+    else:
+        r = api_get(f"/search?{urlencode({'q': query})}")
+        items = r.get("results", [])
+        if not items:
+            safe_print(_dim("\n  No memories found."))
+        else:
+            safe_print(_bold(f"\n  {len(items)} result(s):\n"))
+            type_colors = {"completed": _green, "decision": _amber, "blocker": _red, "learning": _purple}
+            for m in items[:15]:
+                color = type_colors.get(m.get("type",""), _dim)
+                badge = color(f"[{m.get('type','?')}]")
+                safe_print(f"  {badge} {m.get('text','')[:80]}")
+
+    safe_print("")
+    _ask(_dim("  [Enter to go back]"))
+
+
+def _menu_today_summary():
+    """Show today's summary and recent entries."""
+    _cls()
+    safe_print(_bold("\n  Today's Summary"))
+    _hr()
+
+    s = api_get("/summary")
+    if "error" in s:
+        safe_print(_red("  Cannot reach agent"))
+        _ask(""); return
+
+    safe_print(f"\n  Total entries:  {_bold(str(s.get('total',0)))}")
+    safe_print(f"  Completed:      {_green(str(s.get('completed',0)))}")
+    safe_print(f"  Decisions:      {_amber(str(s.get('decisions',0)))}")
+    safe_print(f"  Blockers:       {_red(str(s.get('blockers',0)))}")
+    safe_print(f"  Learnings:      {_cyan(str(s.get('learnings',0)))}")
+
+    t = api_get("/tokens/summary")
+    if "error" not in t:
+        cost    = t.get("total_cost_usd", 0)
+        savings = t.get("total_cache_savings_usd", 0)
+        safe_print(f"\n  API cost:       {_amber(f'${cost:.4f}')}")
+        safe_print(f"  Cache saved:    {_green(f'${savings:.2f}')}")
+
+    safe_print(_bold("\n  Recent:"))
+    r = api_get("/recent?limit=8")
+    type_colors = {"completed": _green, "decision": _amber, "blocker": _red, "learning": _purple, "general": _dim}
+    for m in r.get("memories", []):
+        color = type_colors.get(m.get("type",""), _dim)
+        safe_print(f"  {color(f'[{m[\"type\"]}]')} {m.get('text','')[:72]}")
+
+    safe_print("")
+    _ask(_dim("  [Enter to go back]"))
+
+
+def _menu_generate_claude_md():
+    """Generate or update CLAUDE.md for current project."""
+    _cls()
+    safe_print(_bold("\n  Generate CLAUDE.md"))
+    _hr()
+
+    cwd = Path.cwd()
+    target = cwd / "CLAUDE.md"
+    existing = target.read_text(encoding="utf-8") if target.exists() else ""
+
+    project_name = cwd.name
+    agent_url = API_HOST
+
+    s = api_get("/summary")
+    ctx = api_get("/context")
+    agent_name = s.get("active_agent", "default") if "error" not in s else "default"
+
+    content = f"""# {project_name} — Claude Code Setup
+
+## Super Memory Integration
+
+This project uses Super Memory for persistent AI context.
+
+**Memory agent:** `{agent_url}`
+**Active agent:** `{agent_name}`
+
+## Session Start (run every time)
+
+```bash
+mem context          # load memory into this session
+mem summary          # see what was done
+```
+
+## During Work
+
+```bash
+mem done "what you completed"
+mem decision "choice" --reason "why"
+mem blocked "task" --blocker "what's blocking"
+mem add "any note worth remembering"
+```
+
+## Current Context
+
+"""
+    if "error" not in ctx:
+        content += ctx.get("context", "(empty)") + "\n"
+    else:
+        content += "(run `mem context` to load)\n"
+
+    content += """
+## Rules for Claude
+
+- **Always** run `mem context` at session start
+- **After each completed task** run `mem done "description"`
+- **After architectural decisions** run `mem decision "choice" --reason "why"`
+- **When blocked** run `mem blocked "task" --blocker "reason"`
+- Reference memory context before asking the user to repeat information
+"""
+
+    safe_print(f"  Target: {_cyan(str(target))}")
+    if existing:
+        safe_print(_amber("  File exists — will be replaced."))
+
+    confirm = _ask(_amber("\n  Create/update CLAUDE.md? [y/N]: "))
+    if confirm.lower() == "y":
+        target.write_text(content, encoding="utf-8")
+        safe_print(_green(f"\n  [OK] Written: {target}"))
+        safe_print(_dim("  Claude Code will read this automatically at session start."))
+    else:
+        safe_print(_dim("  Cancelled."))
+
+    safe_print("")
+    _ask(_dim("  [Enter to go back]"))
+
+
+def cmd_launch(args):
+    """Interactive launcher — the main UX entry point."""
+
+    # ── Step 1: ensure agent is running ──────────────────────────
+    if not _ensure_agent_running():
+        _ask(_dim("\n  [Enter to exit]"))
+        return 1
+
+    # ── Step 2: load state ────────────────────────────────────────
+    summary = api_get("/summary")
+    agent   = summary.get("active_agent", "default") if "error" not in summary else "default"
+
+    # Main loop
+    while True:
+        _header(summary, agent, connected=True)
+
+        project_r = api_get("/projects")
+        projects  = project_r.get("projects", []) if "error" not in project_r else []
+        proj_line = _dim(f"  Project: {projects[0]['name']}") if projects else _dim("  No project selected")
+        safe_print(proj_line)
+        safe_print("")
+
+        _hr()
+        safe_print(_bold("  What do you want to do?\n"))
+
+        menu = [
+            (_amber("1") + "  Start AI session          " + _dim("→ load context for Claude"),      "ai_session"),
+            (_amber("2") + "  Open dashboard            " + _dim("→ browser UI at :8080/dashboard"), "dashboard"),
+            (_amber("3") + "  Quick add memory          " + _dim("→ capture a note, task, decision"),"quick_add"),
+            (_amber("4") + "  Select / switch project   " + _dim("→ change active project context"), "project"),
+            (_amber("5") + "  Select / switch agent     " + _dim("→ change AI agent"),              "agent"),
+            (_amber("6") + "  Today's summary           " + _dim("→ what was done, costs"),         "summary"),
+            (_amber("7") + "  Search memories & files   " + _dim("→ find anything"),                "search"),
+            (_amber("8") + "  Generate CLAUDE.md        " + _dim("→ wire Claude Code to memory"),   "claude_md"),
+            (_amber("0") + "  Exit",                                                                  "exit"),
+        ]
+
+        for label, _ in menu:
+            safe_print(f"    {label}")
+
+        safe_print("")
+        _hr()
+        choice = _ask(_amber("  → ")).strip()
+
+        action_map = {str(i): v for i, (_, v) in enumerate(menu)}
+        action = action_map.get(choice, "")
+
+        if action == "exit" or choice in ("q", "quit", "exit"):
+            safe_print(_dim("\n  Goodbye.\n"))
+            break
+        elif action == "ai_session":
+            _menu_ai_session(summary, agent)
+        elif action == "dashboard":
+            cmd_monitor(args)
+            import time; time.sleep(1)
+        elif action == "quick_add":
+            _menu_quick_add()
+        elif action == "project":
+            chosen = _menu_select_project()
+            # Switch agent context to match project if agent exists
+            if chosen:
+                agent_r = api_get("/agents")
+                agent_names = [a['name'] for a in agent_r.get("agents", [])]
+                if chosen in agent_names:
+                    api_post("/agents/select", {"name": chosen})
+                    agent = chosen
+        elif action == "agent":
+            new_agent = _menu_select_agent()
+            if new_agent:
+                agent = new_agent
+        elif action == "summary":
+            _menu_today_summary()
+        elif action == "search":
+            _menu_search()
+        elif action == "claude_md":
+            _menu_generate_claude_md()
+        else:
+            import time; time.sleep(0.1)
+
+        # Refresh summary after any action
+        summary = api_get("/summary")
+        agent   = summary.get("active_agent", "default") if "error" not in summary else agent
+
+    return 0
+
+
+# ============================================================
 # UNIFIED CLI — inject, monitor, daemon
 # ============================================================
 
@@ -1269,7 +1779,7 @@ def main():
     args = parser.parse_args()
 
     if not args.command:
-        args.command = 'shell'  # Default to interactive shell
+        args.command = 'launch'  # Default to interactive launcher
 
     commands = {
         'add': cmd_add,
@@ -1303,7 +1813,9 @@ def main():
         'agent_info': cmd_agent_info,
         'inject': cmd_inject,
         'monitor': cmd_monitor,
+        'dashboard': cmd_monitor,
         'daemon': cmd_daemon,
+        'launch': cmd_launch,
         'help': lambda a: parser.print_help(),
         'shell': cmd_shell
     }
