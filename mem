@@ -1095,36 +1095,23 @@ def cmd_inject(args):
 
 
 def cmd_monitor(args):
-    """Start the web dashboard (desktop_monitor/app.py)."""
-    import subprocess
+    """Open the dashboard in the browser.
 
-    monitor_path = Path(__file__).parent / "desktop_monitor" / "app.py"
-    if not monitor_path.exists():
-        monitor_path = Path.home() / ".super_memory" / "desktop_monitor" / "app.py"
+    The dashboard is served directly by memory_agent.py at /dashboard —
+    no extra process needed. Just ensure the agent is running.
+    """
+    import webbrowser
 
-    if not monitor_path.exists():
-        safe_print("[X] desktop_monitor not found.")
-        safe_print("   Clone the full repo to use this feature.")
+    api_url = API_HOST.rstrip('/')
+    dashboard_url = f"{api_url}/dashboard"
+
+    if not is_agent_running():
+        safe_print("[X] Super Memory is not running.")
+        safe_print("    Start with: mem start")
         return 1
 
-    port = args.port or 5000
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
-
-    safe_print(f"[OK] Starting dashboard on http://127.0.0.1:{port}")
-
-    try:
-        import webbrowser
-        import time
-        proc = subprocess.Popen(
-            [sys.executable, str(monitor_path), "--port", str(port)],
-            env=env,
-        )
-        time.sleep(1.5)
-        webbrowser.open(f"http://127.0.0.1:{port}")
-        proc.wait()
-    except KeyboardInterrupt:
-        safe_print("\n[OK] Dashboard stopped.")
+    safe_print(f"[OK] Opening dashboard: {dashboard_url}")
+    webbrowser.open(dashboard_url)
     return 0
 
 

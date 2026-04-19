@@ -303,30 +303,61 @@ def get_token_summary() -> dict:
 
 class MemoryHandler(BaseHTTPRequestHandler):
     """HTTP handler for memory + file operations."""
-    
+
+    # Path to dashboard.html (same directory as this script)
+    DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
+
     def log_message(self, format, *args):
-        """Suppress log messages."""
         pass
-    
+
     def send_json(self, data, status=200):
-        """Send JSON response."""
+        body = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self._cors_headers()
+        self.send_header('Content-Length', str(len(body)))
         self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
-    
+        self.wfile.write(body)
+
+    def _cors_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests."""
+        self.send_response(204)
+        self._cors_headers()
+        self.end_headers()
+
+    def _serve_dashboard(self):
+        """Serve dashboard.html as static file."""
+        if self.DASHBOARD_PATH.exists():
+            body = self.DASHBOARD_PATH.read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_json({'error': 'dashboard.html not found'}, 404)
+
     # ============================================================
     # MEMORY ENDPOINTS (existing)
     # ============================================================
-    
+
     def do_GET(self):
         """Handle GET requests."""
         parsed = urlparse(self.path)
         path = parsed.path
-        
+
+        # Serve dashboard
+        if path in ('/', '/dashboard', '/dashboard.html'):
+            self._serve_dashboard()
+            return
+
         conn = get_db()
-        
+
         if path == '/health':
             self.send_json({'status': 'ok', 'db': str(DB_PATH)})
         
@@ -935,9 +966,10 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
         # ============================================================
         # MEMORY CRUD — delete and edit individual entries
+        # /delete is the short alias used by dashboard.html
         # ============================================================
 
-        elif path == '/memories/delete':
+        elif path in ('/delete', '/memories/delete'):
             mem_id = data.get('id')
             if not mem_id:
                 self.send_json({'error': 'id required'}, 400)
@@ -980,39 +1012,22 @@ def run_server(port=8080):
     """Run the HTTP server."""
     init_db()
     server = ThreadingHTTPServer(('127.0.0.1', port), MemoryHandler)
-    print(f"Super Memory Agent running on http://127.0.0.1:{port}")
-    print(f"DB: {DB_PATH}")
-    print("\nEndpoints:")
-    print("  GET  /health              — Health check")
-    print("  GET  /summary             — Memory summary")
-    print("  GET  /recent              — Recent entries")
-    print("  GET  /search?q=           — Search memories")
-    print("  GET  /context             — AI context")
-    print("  GET  /tokens/summary      — Token usage")
-    print("  POST /add                 — Add entry")
-    print("  POST /add_completed       — Add completed task")
-    print("  POST /add_decision        — Add decision")
-    print("  POST /add_blocker         — Add blocker")
-    print("  POST /log_tokens         — Log token usage")
+    dashboard_url = f"http://127.0.0.1:{port}/dashboard"
+    print(f"Super Memory Agent  http://127.0.0.1:{port}")
+    print(f"Dashboard           {dashboard_url}")
+    print(f"DB                  {DB_PATH}")
     print()
-    print("  FILE MEMORY (MVP 8):")
-    print("  GET  /files/list          — List all files")
-    print("  GET  /files/<path>/info   — File details")
-    print("  GET  /files/search?q=     — Search files")
-    print("  POST /files/add           — Add/update file")
-    print("  DELETE /files/delete      — Delete file")
+    print("  MEMORY:")
+    print(f"  GET  /health /summary /recent /search?q= /context")
+    print(f"  POST /add  /add_completed  /add_decision  /add_blocker")
+    print(f"  POST /delete {{id}}       — Delete memory")
+    print(f"  POST /memories/edit {{id, text}} — Edit memory")
     print()
-    print("  FOLDER MEMORY:")
-    print("  GET  /folders/list        — List folders")
-    print("  GET  /folders/<path>/info — Folder details")
-    print("  POST /folders/add         — Add/update folder")
+    print("  FILES / FOLDERS / PROJECTS / AGENTS / TOKENS:")
+    print(f"  GET  /files  /folders  /projects  /agents  /tokens/summary")
+    print(f"  POST /files/add  /folders/add  /projects/add  /agents/add")
     print()
-    print("  PROJECT MEMORY:")
-    print("  GET  /projects/list       — List projects")
-    print("  POST /projects/add        — Add/update project")
-    print()
-    print("  CONTEXT:")
-    print("  GET  /file_context?path=  — Full context for file")
+    print(f"  DASHBOARD: open {dashboard_url} in your browser")
     print("\nCtrl+C to stop")
     
     try:
