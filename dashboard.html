@@ -1,0 +1,1309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Super Memory</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:'IBM Plex Sans',-apple-system,sans-serif;background:#0c0b09;color:#e8e0d0;font-size:13.5px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button{font-family:inherit;cursor:pointer;border:none;outline:none}
+input,textarea,select{font-family:inherit;outline:none}
+:focus-visible{outline:2px solid #e8a84c;outline-offset:2px;border-radius:4px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#3d3930;border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:#e8a84c}
+::selection{background:rgba(232,168,76,.2)}
+
+/* ── Tokens ─────────────────────────────────────── */
+:root{
+  --bg:#0c0b09;--surface:#141311;--card:#1c1a16;--card-hover:#242118;
+  --border:#2e2b24;--border-bright:#3d3930;
+  --text:#e8e0d0;--text-dim:#7a7265;--text-muted:#4a4538;
+  --amber:#e8a84c;--amber-dim:rgba(232,168,76,.10);--amber-soft:rgba(232,168,76,.14);--amber-glow:rgba(232,168,76,.28);
+  --green:#7ec88a;--green-dim:rgba(126,200,138,.10);
+  --red:#e88080;--red-dim:rgba(232,128,128,.10);
+  --cyan:#80c8e8;--cyan-dim:rgba(128,200,232,.10);
+  --purple:#b080e8;--purple-dim:rgba(176,128,232,.10);
+  --font:'IBM Plex Sans',-apple-system,sans-serif;
+  --display:'Syne',sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --r-xs:4px;--r-sm:6px;--r-md:10px;--r-lg:14px;
+  --shadow-1:0 1px 3px rgba(0,0,0,.4);
+  --shadow-2:0 4px 20px rgba(0,0,0,.55);
+  --shadow-3:0 16px 48px rgba(0,0,0,.65);
+  --sidebar:228px;--header:52px;--tr:.12s;
+}
+
+/* ── Layout ─────────────────────────────────────── */
+#app{display:grid;grid-template-columns:var(--sidebar) 1fr;height:100vh;overflow:hidden}
+#sidebar{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;height:100vh;overflow:hidden}
+#main{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* ── Brand ──────────────────────────────────────── */
+.brand{padding:18px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-shrink:0}
+.brand-mark{width:30px;height:30px;border-radius:var(--r-sm);background:var(--amber);color:#1a1410;font-family:var(--display);font-weight:800;display:flex;align-items:center;justify-content:center;font-size:10px;letter-spacing:.06em;flex-shrink:0;box-shadow:0 2px 10px var(--amber-glow)}
+.brand-title{font-family:var(--display);font-size:15px;font-weight:700;letter-spacing:.02em;line-height:1.2}
+.brand-sub{font-size:10px;color:var(--text-muted);margin-top:1px;font-family:var(--mono)}
+
+/* ── Sidebar Nav ────────────────────────────────── */
+.nav{padding:10px 8px;flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:1px}
+.nav-section-label{font-size:9.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;font-weight:600;padding:10px 12px 4px;font-family:var(--mono)}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;padding:8px 12px;background:transparent;border:0;color:var(--text-dim);font-family:var(--font);font-size:13px;font-weight:500;text-align:left;cursor:pointer;border-radius:var(--r-sm);transition:background var(--tr),color var(--tr)}
+.nav-btn .nav-icon{font-size:13px;width:16px;text-align:center;flex-shrink:0;color:var(--text-muted);transition:color var(--tr)}
+.nav-btn .nav-count{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-muted);background:var(--card);padding:1px 6px;border-radius:10px;border:1px solid var(--border)}
+.nav-btn:hover{background:var(--amber-dim);color:var(--text)}
+.nav-btn:hover .nav-icon{color:var(--amber)}
+.nav-btn.active{background:var(--amber-soft);color:var(--amber)}
+.nav-btn.active .nav-icon{color:var(--amber)}
+.nav-btn.active .nav-count{background:var(--amber-dim);border-color:var(--amber-soft);color:var(--amber)}
+.nav-divider{height:1px;background:var(--border);margin:6px 12px}
+.sidebar-footer{padding:14px 16px;border-top:1px solid var(--border);flex-shrink:0}
+.agent-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--text-muted);flex-shrink:0;transition:all var(--tr)}
+.status-dot.ok{background:var(--green);box-shadow:0 0 7px var(--green)}
+.status-dot.offline{background:var(--red)}
+.footer-label{font-size:11px;color:var(--text-dim)}
+.footer-mono{font-family:var(--mono);font-size:10px;color:var(--text-muted);margin-top:2px}
+
+/* ── Header bar ─────────────────────────────────── */
+#topbar{height:var(--header);background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 28px;gap:14px;flex-shrink:0}
+.tb-title{font-family:var(--display);font-size:16px;font-weight:700;letter-spacing:-.2px}
+.tb-sub{font-size:12px;color:var(--text-dim)}
+.tb-sep{flex:1}
+select.agent-sel{background:var(--card);border:1px solid var(--border-bright);border-radius:var(--r-sm);color:var(--text);padding:5px 10px;font-size:12px;font-family:var(--font);cursor:pointer;transition:border-color var(--tr)}
+select.agent-sel:hover{border-color:var(--amber)}
+.tb-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:var(--r-sm);font-family:var(--font);font-size:12px;font-weight:600;border:1px solid var(--border-bright);background:var(--card);color:var(--text-dim);cursor:pointer;transition:all var(--tr)}
+.tb-btn:hover{background:var(--card-hover);border-color:var(--amber);color:var(--text)}
+#sync-time{font-size:11px;color:var(--text-muted);font-family:var(--mono)}
+
+/* ── Offline banner ─────────────────────────────── */
+#offline-banner{display:none;background:rgba(232,128,128,.07);border-bottom:1px solid rgba(232,128,128,.25);padding:7px 28px;font-size:12px;color:var(--red);align-items:center;gap:8px}
+#offline-banner.show{display:flex}
+
+/* ── Pages ──────────────────────────────────────── */
+#pages{flex:1;overflow:hidden}
+.page{display:none;flex-direction:column;height:100%;overflow:hidden}
+.page.active{display:flex;animation:fadeUp .18s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+.page-body{flex:1;overflow-y:auto;padding:24px 28px 40px}
+
+/* ── Cards ──────────────────────────────────────── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);padding:16px}
+.card:hover{border-color:var(--border-bright)}
+.card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.card-title{font-family:var(--display);font-size:13px;font-weight:700;letter-spacing:.02em}
+.grid{display:grid;gap:14px}
+.grid-2{grid-template-columns:1fr 1fr}
+.grid-3{grid-template-columns:repeat(3,1fr)}
+.grid-4{grid-template-columns:repeat(4,1fr)}
+.grid-5{grid-template-columns:repeat(5,1fr)}
+
+/* ── Stats ──────────────────────────────────────── */
+.stat{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);padding:14px 16px;transition:border-color var(--tr)}
+.stat:hover{border-color:var(--border-bright)}
+.stat-icon{font-size:18px;margin-bottom:6px}
+.stat-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-dim);font-weight:600}
+.stat-value{font-family:var(--display);font-size:26px;font-weight:700;margin-top:4px;letter-spacing:-.5px}
+.stat-value.amber{color:var(--amber)}
+.stat-value.green{color:var(--green)}
+.stat-value.red{color:var(--red)}
+.stat-value.cyan{color:var(--cyan)}
+.stat-value.purple{color:var(--purple)}
+
+/* ── Buttons ────────────────────────────────────── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:var(--r-sm);font-family:var(--font);font-size:12.5px;font-weight:600;border:1px solid var(--border-bright);background:var(--card);color:var(--text);cursor:pointer;transition:all var(--tr)}
+.btn:hover{background:var(--card-hover);border-color:var(--amber)}
+.btn-primary{background:var(--amber);color:#1a1410;border-color:var(--amber);box-shadow:0 2px 8px var(--amber-glow)}
+.btn-primary:hover{filter:brightness(1.08);box-shadow:0 4px 16px var(--amber-glow)}
+.btn-primary:disabled{opacity:.45;cursor:not-allowed;filter:none;box-shadow:none}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--text-dim)}
+.btn-ghost:hover{color:var(--text);background:var(--amber-dim)}
+.btn-danger{background:var(--red-dim);color:var(--red);border-color:rgba(232,128,128,.25)}
+.btn-danger:hover{background:var(--red);color:#1a1410;border-color:var(--red)}
+.btn-sm{padding:4px 10px;font-size:11.5px}
+
+/* ── Fields ─────────────────────────────────────── */
+.input,.textarea,.sel{width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border-bright);border-radius:var(--r-sm);color:var(--text);font-family:var(--font);font-size:13px;transition:border-color var(--tr),box-shadow var(--tr)}
+.textarea{font-family:var(--mono);font-size:12.5px;resize:vertical;min-height:80px;line-height:1.55}
+.input:focus,.textarea:focus,.sel:focus{border-color:var(--amber);box-shadow:0 0 0 2px var(--amber-dim)}
+.input::placeholder,.textarea::placeholder{color:var(--text-muted)}
+.label{display:block;font-size:11px;color:var(--text-dim);margin-bottom:5px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.field{margin-bottom:12px}
+
+/* ── Badges ─────────────────────────────────────── */
+.badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+.badge-general{background:var(--cyan-dim);color:var(--cyan)}
+.badge-completed{background:var(--green-dim);color:var(--green)}
+.badge-decision{background:var(--amber-dim);color:var(--amber)}
+.badge-blocker{background:var(--red-dim);color:var(--red)}
+.badge-learning{background:var(--purple-dim);color:var(--purple)}
+.badge-agent{background:var(--card-hover);color:var(--text-dim);border:1px solid var(--border-bright)}
+.badge-source{background:var(--card-hover);color:var(--text-muted);border:1px solid var(--border)}
+
+/* ── Memory entries ─────────────────────────────── */
+.entry{padding:12px 16px;border:1px solid var(--border);border-radius:var(--r-sm);background:var(--card);margin-bottom:8px;transition:border-color var(--tr);position:relative}
+.entry:hover{border-color:var(--border-bright)}
+.entry:hover .entry-del{opacity:1}
+.entry-left{display:flex;gap:0;align-items:stretch}
+.entry-bar{width:3px;border-radius:2px;flex-shrink:0;margin-right:14px;opacity:.8}
+.entry-content{flex:1;min-width:0}
+.entry-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.entry-text{color:var(--text);white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.55;cursor:pointer}
+.entry-text.trunc{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.entry-foot{display:flex;align-items:center;gap:8px;margin-top:8px;font-family:var(--mono);font-size:10.5px;color:var(--text-muted)}
+.entry-time{cursor:default;position:relative}
+.entry-time:hover::after{content:attr(data-abs);position:absolute;bottom:calc(100% + 6px);left:0;background:var(--card-hover);border:1px solid var(--border-bright);padding:4px 9px;border-radius:var(--r-sm);white-space:nowrap;z-index:10;font-size:11px;color:var(--text);box-shadow:var(--shadow-2)}
+.entry-del{opacity:0;position:absolute;top:10px;right:10px;background:var(--red-dim);border:1px solid rgba(232,128,128,.22);color:var(--red);border-radius:var(--r-xs);padding:3px 7px;font-size:11px;transition:opacity var(--tr),background var(--tr)}
+.entry-del:hover{background:var(--red);color:#1a1410}
+
+/* ── Quick Add ──────────────────────────────────── */
+#quick-add{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);margin-bottom:20px;overflow:hidden}
+.qa-tabs{display:flex;border-bottom:1px solid var(--border);background:var(--surface);gap:2px;padding:6px 6px 0}
+.qa-tab{padding:6px 13px;background:transparent;border:0;color:var(--text-dim);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;border-bottom:2px solid transparent;border-radius:var(--r-xs) var(--r-xs) 0 0;transition:color var(--tr),background var(--tr)}
+.qa-tab:hover{color:var(--text)}
+.qa-tab.active{color:var(--amber);border-bottom-color:var(--amber);background:var(--card)}
+.qa-body{padding:14px}
+.qa-panel{display:none;flex-direction:column;gap:10px}
+.qa-panel.active{display:flex}
+.qa-row{display:grid;gap:10px}
+.qa-row.cols2{grid-template-columns:1fr 1fr}
+.qa-actions{display:flex;align-items:center;gap:10px;margin-top:4px}
+kbd{background:var(--card-hover);border:1px solid var(--border-bright);border-radius:var(--r-xs);padding:1px 5px;font-size:10px;font-family:var(--mono)}
+.shortcut-hint{font-size:11px;color:var(--text-muted)}
+
+/* ── Section headers ────────────────────────────── */
+.section-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.section-title{font-family:var(--display);font-size:14px;font-weight:700;letter-spacing:.01em}
+
+/* ── Context panel ──────────────────────────────── */
+#ctx-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);margin-top:16px;overflow:hidden;display:none}
+#ctx-panel.open{display:block;animation:fadeUp .18s ease}
+.ctx-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface)}
+.ctx-body{padding:14px;font-family:var(--mono);font-size:12px;color:var(--text-dim);line-height:1.65;max-height:320px;overflow-y:auto;white-space:pre-wrap;word-break:break-word}
+
+/* ── Files ──────────────────────────────────────── */
+.files-split{display:grid;grid-template-columns:270px 1fr;gap:16px;height:calc(100vh - var(--header) - 120px)}
+.file-tree{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);display:flex;flex-direction:column;overflow:hidden}
+.file-tree-head{padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:8px;background:var(--surface)}
+.file-list{flex:1;overflow-y:auto;padding:6px}
+.file-dir{font-size:9.5px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;padding:8px 10px 3px;font-family:var(--mono);font-weight:600}
+.file-row{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:var(--r-xs);cursor:pointer;color:var(--text-dim);transition:background var(--tr),color var(--tr)}
+.file-row:hover{background:var(--amber-dim);color:var(--text)}
+.file-row.active{background:var(--amber-soft);color:var(--amber)}
+.file-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:11px}
+.file-detail{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.file-detail-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:8px;color:var(--text-muted);font-size:13px}
+.fd-path{font-family:var(--mono);font-size:12px;color:var(--amber);background:var(--surface);border:1px solid var(--border);padding:9px 12px;border-radius:var(--r-sm);display:flex;align-items:center;justify-content:space-between}
+.copy-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 6px;border-radius:var(--r-xs);transition:color var(--tr),background var(--tr)}
+.copy-btn:hover{color:var(--amber);background:var(--amber-dim)}
+.tag-list{display:flex;flex-wrap:wrap;gap:6px}
+.tag{display:inline-flex;align-items:center;gap:4px;background:var(--surface);border:1px solid var(--border-bright);border-radius:var(--r-xs);padding:3px 8px;font-size:11px;color:var(--text-dim)}
+.folders-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
+.folder-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);padding:14px;transition:border-color var(--tr)}
+.folder-card:hover{border-color:var(--border-bright)}
+.folder-path{font-family:var(--mono);font-size:11px;color:var(--amber);margin-bottom:6px}
+.project-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);padding:16px;transition:border-color var(--tr)}
+.project-card:hover{border-color:var(--border-bright)}
+.proj-name{font-family:var(--display);font-size:15px;font-weight:700;margin-bottom:4px}
+.proj-root{font-family:var(--mono);font-size:10.5px;color:var(--text-muted);margin-bottom:10px}
+
+/* ── Agents ─────────────────────────────────────── */
+.agents-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.agent-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-md);padding:18px;transition:all var(--tr)}
+.agent-card:hover{border-color:var(--border-bright)}
+.agent-card.active-agent{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber),0 4px 20px var(--amber-glow)}
+.agent-name{font-family:var(--display);font-size:17px;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.active-badge{background:var(--amber);color:#1a1410;font-size:9px;font-weight:700;padding:2px 7px;border-radius:var(--r-xs);letter-spacing:.06em;text-transform:uppercase}
+.badge-claude{background:var(--purple-dim);color:var(--purple)}
+.badge-openai{background:var(--green-dim);color:var(--green)}
+.badge-gemini{background:var(--cyan-dim);color:var(--cyan)}
+.badge-custom{background:var(--amber-dim);color:var(--amber)}
+.agent-meta{font-size:12px;color:var(--text-dim);margin:3px 0;display:flex;gap:8px;align-items:center}
+.agent-meta code{font-family:var(--mono);font-size:10px;color:var(--text-muted)}
+.agent-actions{display:flex;gap:8px;margin-top:14px}
+
+/* ── Token table ────────────────────────────────── */
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl th,.tbl td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--border)}
+.tbl th{color:var(--text-dim);font-weight:600;text-transform:uppercase;font-size:10px;letter-spacing:.07em;cursor:pointer;user-select:none;white-space:nowrap}
+.tbl th:hover{color:var(--amber)}
+.tbl tbody tr:hover{background:var(--amber-dim)}
+.tbl .mono{font-family:var(--mono);font-size:12px}
+.tbl .amber{color:var(--amber);font-family:var(--mono)}
+.tbl .gr{color:var(--green);font-family:var(--mono)}
+
+/* ── Chart ──────────────────────────────────────── */
+#cost-canvas{width:100%;display:block;cursor:crosshair;border-radius:var(--r-sm)}
+.chart-tooltip{position:fixed;background:var(--card-hover);border:1px solid var(--border-bright);border-radius:var(--r-sm);padding:7px 12px;font-size:12px;font-family:var(--mono);pointer-events:none;z-index:50;display:none;box-shadow:var(--shadow-2)}
+
+/* ── Search ─────────────────────────────────────── */
+.search-wrap{max-width:680px;margin:0 auto}
+.search-bar{position:relative;margin-bottom:14px}
+.search-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:15px;pointer-events:none}
+#search-input{background:var(--card);border:1px solid var(--border-bright);border-radius:var(--r-md);color:var(--text);padding:12px 16px 12px 46px;font-size:15px;font-family:var(--font);width:100%;transition:all var(--tr)}
+#search-input:focus{border-color:var(--amber);box-shadow:0 0 0 2px var(--amber-dim)}
+.search-toggles{display:flex;gap:6px;margin-bottom:20px}
+.stoggle{padding:5px 14px;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;background:var(--card);border:1px solid var(--border-bright);color:var(--text-dim);transition:all var(--tr)}
+.stoggle.active{background:var(--amber-soft);border-color:var(--amber);color:var(--amber)}
+.sr-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r-sm);padding:14px;margin-bottom:8px;cursor:pointer;transition:border-color var(--tr)}
+.sr-card:hover{border-color:var(--border-bright)}
+.sr-text{font-size:13px;color:var(--text-dim);line-height:1.5;margin-top:7px}
+.sr-empty{text-align:center;color:var(--text-muted);padding:48px 0;font-size:13px;font-style:italic}
+
+/* ── Modal ───────────────────────────────────────── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(3px);z-index:200;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity var(--tr)}
+.modal-overlay.open{opacity:1;pointer-events:all}
+.modal{background:var(--card);border:1px solid var(--border-bright);border-radius:var(--r-lg);padding:24px;width:480px;max-width:95vw;transform:translateY(10px) scale(.98);transition:transform .2s cubic-bezier(.34,1.56,.64,1);box-shadow:var(--shadow-3)}
+.modal-overlay.open .modal{transform:translateY(0) scale(1)}
+.modal-title{font-family:var(--display);font-size:16px;font-weight:700;margin-bottom:20px}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;padding-top:16px;border-top:1px solid var(--border)}
+.type-btns{display:flex;gap:6px;flex-wrap:wrap}
+.type-btn{padding:5px 12px;border-radius:var(--r-sm);font-size:12px;font-weight:600;cursor:pointer;background:var(--surface);border:1px solid var(--border-bright);color:var(--text-dim);transition:all var(--tr)}
+.type-btn.active{background:var(--amber);border-color:var(--amber);color:#1a1410}
+.eye-toggle{position:relative;display:flex;align-items:center}
+.eye-toggle .input{padding-right:36px}
+.eye-btn{position:absolute;right:10px;background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:0}
+
+/* ── Settings ────────────────────────────────────── */
+#settings-overlay{position:fixed;inset:0;z-index:150;pointer-events:none}
+#settings-overlay.open{pointer-events:all}
+#settings-bg{position:absolute;inset:0;background:rgba(0,0,0,.5);opacity:0;transition:opacity var(--tr)}
+#settings-overlay.open #settings-bg{opacity:1}
+#settings-panel{position:absolute;top:0;right:0;width:340px;height:100%;background:var(--surface);border-left:1px solid var(--border-bright);display:flex;flex-direction:column;transform:translateX(100%);transition:transform .22s ease;box-shadow:var(--shadow-3)}
+#settings-overlay.open #settings-panel{transform:translateX(0)}
+.sp-head{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.sp-head-title{font-family:var(--display);font-size:15px;font-weight:700}
+.sp-body{flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:22px}
+.sp-section{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:10px;font-family:var(--mono)}
+.sp-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.sp-label{font-size:13px;color:var(--text-dim)}
+.sp-sel{background:var(--card);border:1px solid var(--border-bright);border-radius:var(--r-sm);color:var(--text);padding:5px 9px;font-size:12px;font-family:var(--font)}
+
+/* ── Toasts ─────────────────────────────────────── */
+#toast-container{position:fixed;bottom:20px;right:20px;z-index:300;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{pointer-events:auto;background:var(--card);border:1px solid var(--border-bright);border-left:3px solid var(--amber);border-radius:var(--r-sm);padding:10px 16px;font-size:12.5px;display:flex;align-items:center;gap:10px;min-width:240px;animation:toastIn .18s ease;box-shadow:var(--shadow-2)}
+.toast.success{border-left-color:var(--green)}
+.toast.error{border-left-color:var(--red)}
+@keyframes toastIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes toastOut{to{opacity:0;transform:translateX(12px)}}
+.toast.out{animation:toastOut .18s ease forwards}
+
+/* ── Spinner ─────────────────────────────────────── */
+.spinner{width:13px;height:13px;border:2px solid rgba(26,20,16,.25);border-top-color:#1a1410;border-radius:50%;animation:spin .5s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Skeletons ───────────────────────────────────── */
+.skel{background:linear-gradient(90deg,var(--card) 0%,var(--card-hover) 50%,var(--card) 100%);background-size:200% 100%;animation:skel 1.4s infinite;border-radius:var(--r-xs)}
+.skel-line{height:11px;margin-bottom:6px}
+.skel-card{height:56px;margin-bottom:8px}
+@keyframes skel{from{background-position:200% 0}to{background-position:-200% 0}}
+
+/* ── Misc ─────────────────────────────────────────── */
+.pre{font-family:var(--mono);font-size:12px;white-space:pre-wrap;word-break:break-word;color:var(--text);padding:12px;max-height:380px;overflow:auto;line-height:1.6}
+.empty{padding:40px;text-align:center;color:var(--text-muted);font-style:italic;font-size:13px}
+.empty big{display:block;font-size:30px;margin-bottom:8px}
+details summary{cursor:pointer;color:var(--text-dim);font-size:11px;font-weight:600;user-select:none}
+details summary:hover{color:var(--amber)}
+code{font-family:var(--mono);font-size:11px;background:var(--surface);padding:1px 5px;border-radius:var(--r-xs);border:1px solid var(--border)}
+.model-pill{background:var(--surface);border:1px solid var(--border-bright);border-radius:99px;padding:4px 12px;font-size:12px;color:var(--text-dim);font-family:var(--mono)}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- SIDEBAR -->
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">SM</div>
+      <div>
+        <div class="brand-title">Super Memory</div>
+        <div class="brand-sub">gigamemory</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <div class="nav-section-label">Views</div>
+      <button class="nav-btn active" data-page="memory"><span class="nav-icon">⬡</span>Memory<span class="nav-count" id="nb-memory">0</span></button>
+      <button class="nav-btn" data-page="files"><span class="nav-icon">◫</span>Files<span class="nav-count" id="nb-files">0</span></button>
+      <button class="nav-btn" data-page="agents"><span class="nav-icon">◈</span>Agents<span class="nav-count" id="nb-agents">0</span></button>
+      <button class="nav-btn" data-page="tokens"><span class="nav-icon">◉</span>Tokens</button>
+      <button class="nav-btn" data-page="search"><span class="nav-icon">◎</span>Search</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="agent-row">
+        <div class="status-dot" id="status-dot"></div>
+        <span class="footer-label" id="status-text">Connecting…</span>
+      </div>
+      <div class="footer-mono" id="sync-time"></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div id="main">
+    <div id="topbar">
+      <div>
+        <div class="tb-title" id="tb-title">Memory</div>
+        <div class="tb-sub" id="tb-sub">Persistent AI agent memory</div>
+      </div>
+      <div class="tb-sep"></div>
+      <select class="agent-sel" id="agent-selector"></select>
+      <button class="tb-btn" id="settings-btn">⚙ Settings</button>
+    </div>
+
+    <div id="offline-banner">⚡ Memory agent offline — start with: <code>mem start</code></div>
+
+    <div id="pages">
+
+      <!-- PAGE: MEMORY -->
+      <div class="page active" id="page-memory">
+        <div class="page-body">
+          <div class="grid grid-4" style="margin-bottom:20px" id="stats-grid">
+            <div class="stat"><div class="stat-icon">⬡</div><div class="stat-label">Total</div><div class="stat-value amber" id="s-total">0</div></div>
+            <div class="stat"><div class="stat-icon">✓</div><div class="stat-label">Completed</div><div class="stat-value green" id="s-completed">0</div></div>
+            <div class="stat"><div class="stat-icon">⚖</div><div class="stat-label">Decisions</div><div class="stat-value" style="color:var(--amber)" id="s-decisions">0</div></div>
+            <div class="stat"><div class="stat-icon">⚡</div><div class="stat-label">Blockers</div><div class="stat-value red" id="s-blockers">0</div></div>
+          </div>
+
+          <!-- Quick Add -->
+          <div id="quick-add">
+            <div class="qa-tabs">
+              <button class="qa-tab active" data-type="general">General</button>
+              <button class="qa-tab" data-type="completed">Completed</button>
+              <button class="qa-tab" data-type="decision">Decision</button>
+              <button class="qa-tab" data-type="blocker">Blocker</button>
+              <button class="qa-tab" data-type="learning">Learning</button>
+            </div>
+            <div class="qa-body">
+              <div class="qa-panel active" id="qp-general">
+                <textarea class="textarea" id="qa-text" placeholder="Add a memory — note, observation, context…"></textarea>
+              </div>
+              <div class="qa-panel" id="qp-completed">
+                <div class="qa-row cols2"><input class="input" id="qa-task" placeholder="Task name"><input class="input" id="qa-result" placeholder="Result / outcome"></div>
+                <input class="input" id="qa-artifacts" placeholder="Artifacts (comma-separated paths, optional)">
+              </div>
+              <div class="qa-panel" id="qp-decision">
+                <div class="qa-row cols2"><input class="input" id="qa-topic" placeholder="Topic"><input class="input" id="qa-decision" placeholder="Decision made"></div>
+                <input class="input" id="qa-reason" placeholder="Reason / rationale">
+              </div>
+              <div class="qa-panel" id="qp-blocker">
+                <div class="qa-row cols2"><input class="input" id="qa-btask" placeholder="Task being blocked"><input class="input" id="qa-blocker" placeholder="What is blocking it"></div>
+                <input class="input" id="qa-needed" placeholder="What is needed to unblock">
+              </div>
+              <div class="qa-panel" id="qp-learning">
+                <textarea class="textarea" id="qa-learning-text" placeholder="Insight, pattern, best practice — what did you learn?"></textarea>
+              </div>
+              <div class="qa-actions">
+                <button class="btn btn-primary" id="qa-submit">Add Memory</button>
+                <span class="shortcut-hint"><kbd>Ctrl</kbd>+<kbd>↵</kbd></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="section-row">
+            <div class="section-title">Recent</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-ghost btn-sm" onclick="toggleCtx()">Context</button>
+              <button class="btn btn-ghost btn-sm" onclick="loadMemories()">↻ Refresh</button>
+            </div>
+          </div>
+          <div id="memories-list"><div class="empty"><big>⬡</big>No memories yet.</div></div>
+          <div style="display:flex;justify-content:center;margin-top:16px">
+            <button class="btn btn-ghost btn-sm" id="load-more-btn" style="display:none" onclick="loadMore()">Load more</button>
+          </div>
+
+          <div id="ctx-panel">
+            <div class="ctx-head">
+              <span style="font-family:var(--display);font-size:13px;font-weight:700">Prompt Context</span>
+              <button class="copy-btn" onclick="copyCtx()">Copy</button>
+            </div>
+            <div class="ctx-body" id="ctx-body">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAGE: FILES -->
+      <div class="page" id="page-files">
+        <div class="page-body">
+          <div class="files-split">
+            <div class="file-tree">
+              <div class="file-tree-head">
+                <input class="input" id="file-search" placeholder="Filter files…" style="font-size:12px;padding:6px 10px">
+                <button class="btn btn-primary btn-sm" style="width:100%;justify-content:center" onclick="openModal('modal-file')">＋ Track File</button>
+              </div>
+              <div class="file-list" id="file-list"><div class="empty">No files tracked.</div></div>
+            </div>
+            <div class="file-detail" id="file-detail">
+              <div class="file-detail-empty"><span style="font-size:30px;opacity:.4">◫</span><span>Select a file</span></div>
+            </div>
+          </div>
+
+          <div class="section-row" style="margin-top:28px">
+            <div class="section-title">Folders</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('modal-folder')">＋ Add</button>
+          </div>
+          <div class="folders-grid" id="folders-grid"><div class="empty">No folders tracked.</div></div>
+
+          <div class="section-row" style="margin-top:28px">
+            <div class="section-title">Projects</div>
+            <button class="btn btn-primary btn-sm" onclick="openModal('modal-project')">＋ Add</button>
+          </div>
+          <div id="projects-list"><div class="empty">No projects tracked.</div></div>
+        </div>
+      </div>
+
+      <!-- PAGE: AGENTS -->
+      <div class="page" id="page-agents">
+        <div class="page-body">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:20px">
+            <button class="btn btn-primary" onclick="openModal('modal-agent')">＋ Add Agent</button>
+          </div>
+          <div class="agents-grid" id="agents-grid"><div class="empty">No agents configured.</div></div>
+        </div>
+      </div>
+
+      <!-- PAGE: TOKENS -->
+      <div class="page" id="page-tokens">
+        <div class="page-body">
+          <div class="grid grid-5" style="margin-bottom:24px">
+            <div class="stat"><div class="stat-label">Total Cost</div><div class="stat-value amber" id="t-cost" style="font-size:20px">$0.0000</div></div>
+            <div class="stat"><div class="stat-label">Requests</div><div class="stat-value" id="t-reqs">0</div></div>
+            <div class="stat"><div class="stat-label">Input Tokens</div><div class="stat-value cyan" id="t-input" style="font-size:20px">0</div></div>
+            <div class="stat"><div class="stat-label">Output Tokens</div><div class="stat-value green" id="t-output" style="font-size:20px">0</div></div>
+            <div class="stat"><div class="stat-label">Cache Saved</div><div class="stat-value green" id="t-saved" style="font-size:20px">$0.00</div></div>
+          </div>
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header"><div class="card-title">Daily Cost (USD)</div></div>
+            <canvas id="cost-canvas" height="180"></canvas>
+          </div>
+          <div class="card" style="margin-bottom:16px">
+            <div class="card-header"><div class="card-title">Models Used</div></div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px" id="models-row"><span style="color:var(--text-muted);font-size:12px">No data yet.</span></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><div class="card-title">Recent Requests</div></div>
+            <div style="overflow-x:auto">
+              <table class="tbl">
+                <thead><tr>
+                  <th data-col="timestamp">Time</th>
+                  <th data-col="model">Model</th>
+                  <th data-col="input_tokens">Input</th>
+                  <th data-col="output_tokens">Output</th>
+                  <th data-col="estimated_cost_usd">Cost</th>
+                  <th data-col="cache_savings_usd">Saved</th>
+                </tr></thead>
+                <tbody id="token-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PAGE: SEARCH -->
+      <div class="page" id="page-search">
+        <div class="page-body">
+          <div class="search-wrap">
+            <div class="search-bar">
+              <span class="search-icon">⌕</span>
+              <input type="text" id="search-input" placeholder="Search memories and files…" autocomplete="off">
+            </div>
+            <div class="search-toggles">
+              <button class="stoggle active" data-stype="memories">Memories</button>
+              <button class="stoggle" data-stype="files">Files</button>
+            </div>
+            <div id="search-results"><div class="sr-empty">Start typing to search…</div></div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /pages -->
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- chart tooltip -->
+<div class="chart-tooltip" id="chart-tooltip"></div>
+
+<!-- MODAL: ADD AGENT -->
+<div class="modal-overlay" id="modal-agent">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">Add Agent</div>
+    <div class="field"><label class="label">Name</label><input class="input" id="ag-name" placeholder="my-agent (no spaces)"></div>
+    <div class="field"><label class="label">Type</label>
+      <div class="type-btns">
+        <button class="type-btn active" data-agtype="claude">Claude</button>
+        <button class="type-btn" data-agtype="openai">OpenAI</button>
+        <button class="type-btn" data-agtype="gemini">Gemini</button>
+        <button class="type-btn" data-agtype="custom">Custom</button>
+      </div>
+    </div>
+    <div class="field"><label class="label">Model</label><input class="input" id="ag-model" placeholder="claude-3-5-sonnet-20241022"></div>
+    <div class="field"><label class="label">API Key</label>
+      <div class="eye-toggle"><input class="input" type="password" id="ag-key" placeholder="sk-…"><button class="eye-btn" onclick="togglePw('ag-key',this)">👁</button></div>
+    </div>
+    <div class="field"><label class="label">API URL <span style="color:var(--text-muted)">(optional)</span></label><input class="input" id="ag-url" placeholder="https://api.anthropic.com"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-agent')">Cancel</button>
+      <button class="btn btn-primary" id="ag-submit" onclick="submitAgent()">Add Agent</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: TRACK FILE -->
+<div class="modal-overlay" id="modal-file">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">Track File</div>
+    <div class="field"><label class="label">File Path</label><input class="input" id="fi-path" placeholder="/path/to/file.py"></div>
+    <div class="field"><label class="label">Purpose</label><input class="input" id="fi-purpose" placeholder="What is this file for?"></div>
+    <div class="field"><label class="label">Description</label><textarea class="textarea" id="fi-desc" placeholder="Additional description…" style="min-height:60px"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-file')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitFile()">Track File</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: ADD FOLDER -->
+<div class="modal-overlay" id="modal-folder">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">Track Folder</div>
+    <div class="field"><label class="label">Folder Path</label><input class="input" id="fo-path" placeholder="/path/to/folder"></div>
+    <div class="field"><label class="label">Purpose</label><input class="input" id="fo-purpose" placeholder="What is this folder for?"></div>
+    <div class="field"><label class="label">Description</label><textarea class="textarea" id="fo-desc" style="min-height:60px" placeholder="Optional description…"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-folder')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitFolder()">Track Folder</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL: ADD PROJECT -->
+<div class="modal-overlay" id="modal-project">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-title">Add Project</div>
+    <div class="field"><label class="label">Name</label><input class="input" id="pr-name" placeholder="my-project"></div>
+    <div class="field"><label class="label">Root Path</label><input class="input" id="pr-root" placeholder="/path/to/project"></div>
+    <div class="field"><label class="label">Architecture</label><textarea class="textarea" id="pr-arch" placeholder="Brief architecture description…" style="min-height:60px"></textarea></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-project')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitProject()">Add Project</button>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS PANEL -->
+<div id="settings-overlay">
+  <div id="settings-bg" onclick="closeSettings()"></div>
+  <div id="settings-panel">
+    <div class="sp-head">
+      <span class="sp-head-title">Settings</span>
+      <button class="btn btn-ghost btn-sm" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="sp-body">
+      <div>
+        <div class="sp-section">Connection</div>
+        <div class="field"><label class="label">API URL</label><input class="input" id="sp-url" value="http://127.0.0.1:8080"></div>
+        <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="applySettings()">Apply</button>
+      </div>
+      <div>
+        <div class="sp-section">Polling</div>
+        <div class="sp-row"><span class="sp-label">Refresh interval</span>
+          <select class="sp-sel" id="sp-interval">
+            <option value="10000">10s</option>
+            <option value="30000" selected>30s</option>
+            <option value="60000">60s</option>
+            <option value="0">Manual</option>
+          </select>
+        </div>
+        <div class="sp-row"><span class="sp-label">Memories per page</span>
+          <select class="sp-sel" id="sp-perpage">
+            <option value="10">10</option>
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <div class="sp-section">Data</div>
+        <button class="btn" style="width:100%;justify-content:center;margin-bottom:8px" onclick="exportMemories()">⬇ Export Memories (JSON)</button>
+        <label class="btn" style="width:100%;justify-content:center;cursor:pointer">⬆ Import Memories (JSON)<input type="file" accept=".json" style="display:none" onchange="importMemories(this)"></label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+// ── Config & State ─────────────────────────────────────────────────────────
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{"apiUrl":"http://127.0.0.1:8080","pollInterval":30000,"perPage":25}/*EDITMODE-END*/;
+const config = {...TWEAK_DEFAULTS};
+
+const PAGE_TITLES = {memory:['Memory','Persistent AI agent memory'],files:['Files','Tracked files, folders and projects'],agents:['Agents','Manage AI agents'],tokens:['Tokens','Cost tracking and usage analytics'],search:['Search','Search memories and files']};
+
+const state = {
+  activePage: localStorage.getItem('sm-page') || 'memory',
+  memories:[], memOffset:0,
+  files:[], folders:[], projects:[],
+  agents:[], activeAgent:'default',
+  tokenEntries:[],
+  isConnected:false, lastSync:null,
+  selectedFile:null,
+  searchType:'memories',
+  sortCol:'timestamp', sortDir:-1,
+  ctxOpen:false,
+  expanded:new Set(),
+};
+
+// ── API ────────────────────────────────────────────────────────────────────
+const api = {
+  get: ep => fetch(`${config.apiUrl}${ep}`).then(r => { if(!r.ok) throw new Error(r.status); return r.json(); }),
+  post: (ep,data) => fetch(`${config.apiUrl}${ep}`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(r => { if(!r.ok) throw new Error(r.status); return r.json(); })
+};
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function toast(msg, type='info', dur=3000) {
+  const c = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  c.appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 200); }, dur);
+}
+
+// ── Navigation ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.nav-btn[data-page]').forEach(btn => {
+  btn.addEventListener('click', () => navigateTo(btn.dataset.page));
+});
+
+function navigateTo(page) {
+  state.activePage = page;
+  localStorage.setItem('sm-page', page);
+  document.querySelectorAll('.nav-btn[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === page));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
+  const [title, sub] = PAGE_TITLES[page] || [page, ''];
+  document.getElementById('tb-title').textContent = title;
+  document.getElementById('tb-sub').textContent = sub;
+  if(page === 'memory') loadMemories();
+  if(page === 'files') loadFiles();
+  if(page === 'agents') loadAgents();
+  if(page === 'tokens') loadTokens();
+  if(page === 'search') document.getElementById('search-input').focus();
+}
+
+// ── Health & Polling ──────────────────────────────────────────────────────
+let pollTimer = null;
+
+async function checkHealth() {
+  try { await api.get('/health'); setConnected(true); }
+  catch(e) { setConnected(false); }
+}
+
+function setConnected(ok) {
+  state.isConnected = ok;
+  document.getElementById('status-dot').className = `status-dot ${ok ? 'ok' : 'offline'}`;
+  document.getElementById('status-text').textContent = ok ? 'Connected' : 'Offline';
+  document.getElementById('offline-banner').classList.toggle('show', !ok);
+  if(ok) { state.lastSync = new Date(); document.getElementById('sync-time').textContent = 'synced ' + relTime(state.lastSync); }
+}
+
+async function fullRefresh() {
+  await checkHealth();
+  if(!state.isConnected) return;
+  await Promise.all([loadSummary(), loadMemories(), loadAgentSel()]);
+}
+
+function startPolling() {
+  if(pollTimer) clearInterval(pollTimer);
+  if(config.pollInterval > 0) pollTimer = setInterval(fullRefresh, config.pollInterval);
+}
+
+// ── Summary ────────────────────────────────────────────────────────────────
+async function loadSummary() {
+  try {
+    const d = await api.get('/summary');
+    animateCount('s-total', d.total || 0);
+    animateCount('s-completed', d.completed || 0);
+    animateCount('s-decisions', d.decisions || 0);
+    animateCount('s-blockers', d.blockers || 0);
+    document.getElementById('nb-memory').textContent = d.total || 0;
+  } catch(e) {}
+}
+
+function animateCount(id, target) {
+  const el = document.getElementById(id);
+  const start = parseInt(el.textContent) || 0;
+  if(start === target) return;
+  const dur = 600, s = performance.now();
+  const step = now => {
+    const t = Math.min((now - s) / dur, 1);
+    el.textContent = Math.round(start + (target - start) * (1 - Math.pow(1 - t, 3)));
+    if(t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+// ── Memories ───────────────────────────────────────────────────────────────
+async function loadMemories(append=false) {
+  if(!append) { state.memOffset = 0; state.memories = []; }
+  try {
+    const d = await api.get('/recent');
+    state.memories = append ? [...state.memories, ...(d.memories||[])] : (d.memories||[]);
+    renderMemories();
+  } catch(e) { if(!append) renderMemories(); }
+}
+
+function loadMore() { state.memOffset += config.perPage; loadMemories(true); }
+
+const TYPE_EMOJI = {completed:'✓',decision:'⚖',blocker:'⚡',learning:'◉',general:'◎'};
+const TYPE_COLOR = {completed:'var(--green)',decision:'var(--amber)',blocker:'var(--red)',learning:'var(--purple)',general:'var(--cyan)'};
+
+function renderMemories() {
+  const el = document.getElementById('memories-list');
+  if(!state.memories.length) { el.innerHTML = '<div class="empty"><big>⬡</big>No memories yet. Add one above.</div>'; document.getElementById('load-more-btn').style.display='none'; return; }
+  const shown = state.memories.slice(0, state.memOffset + config.perPage);
+  el.innerHTML = shown.map(m => {
+    const type = m.type || 'general';
+    const color = TYPE_COLOR[type];
+    const expanded = state.expanded.has(m.id);
+    return `<div class="entry" data-id="${m.id}">
+      <div class="entry-left">
+        <div class="entry-bar" style="background:${color}"></div>
+        <div class="entry-content">
+          <div class="entry-head">
+            <span class="badge badge-${type}">${TYPE_EMOJI[type]} ${type}</span>
+            ${m.agent_id && m.agent_id !== 'default' ? `<span class="badge badge-agent">🤖 ${esc(m.agent_id)}</span>` : ''}
+            ${m.source ? `<span class="badge badge-source">${esc(m.source)}</span>` : ''}
+          </div>
+          <div class="entry-text ${expanded?'':'trunc'}">${esc(m.text||'')}</div>
+          <div class="entry-foot">
+            <span class="entry-time" data-abs="${new Date(m.timestamp).toLocaleString()}">${relTime(new Date(m.timestamp))}</span>
+          </div>
+        </div>
+      </div>
+      <button class="entry-del" onclick="deleteMem('${m.id}',event)">🗑</button>
+    </div>`;
+  }).join('');
+  document.getElementById('load-more-btn').style.display = state.memories.length > shown.length ? '' : 'none';
+  el.querySelectorAll('.entry-text').forEach(t => {
+    t.addEventListener('click', () => {
+      const id = t.closest('.entry').dataset.id;
+      state.expanded.has(id) ? state.expanded.delete(id) : state.expanded.add(id);
+      t.classList.toggle('trunc', !state.expanded.has(id));
+    });
+  });
+}
+
+async function deleteMem(id, e) {
+  e.stopPropagation();
+  try {
+    await api.post('/delete', {id});
+    state.memories = state.memories.filter(m => m.id !== id);
+    renderMemories(); toast('Deleted', 'info', 2000); loadSummary();
+  } catch(e) { toast('Delete failed', 'error'); }
+}
+
+// ── Quick Add ──────────────────────────────────────────────────────────────
+let activeQaType = 'general';
+document.querySelectorAll('.qa-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    activeQaType = tab.dataset.type;
+    document.querySelectorAll('.qa-tab').forEach(t => t.classList.toggle('active', t === tab));
+    document.querySelectorAll('.qa-panel').forEach(p => p.classList.toggle('active', p.id === 'qp-' + activeQaType));
+    const labels = {general:'Add Memory',completed:'Add Completed',decision:'Add Decision',blocker:'Add Blocker',learning:'Add Learning'};
+    document.getElementById('qa-submit').textContent = labels[activeQaType];
+  });
+});
+
+document.getElementById('qa-submit').addEventListener('click', submitMemory);
+document.addEventListener('keydown', e => {
+  if((e.ctrlKey||e.metaKey) && e.key === 'Enter') {
+    if(document.querySelector('.qa-panel.active')?.contains(document.activeElement)) submitMemory();
+  }
+});
+
+async function submitMemory() {
+  const btn = document.getElementById('qa-submit');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Adding…';
+  try {
+    let endpoint, payload;
+    if(activeQaType === 'general' || activeQaType === 'learning') {
+      const text = document.getElementById(activeQaType === 'general' ? 'qa-text' : 'qa-learning-text').value.trim();
+      if(!text) throw new Error('Text required');
+      endpoint = '/add'; payload = {text, type:activeQaType, source:'dashboard'};
+    } else if(activeQaType === 'completed') {
+      const task = document.getElementById('qa-task').value.trim(), result = document.getElementById('qa-result').value.trim();
+      const arts = document.getElementById('qa-artifacts').value.trim();
+      if(!task||!result) throw new Error('Task and result required');
+      endpoint = '/add_completed'; payload = {task, result, artifacts: arts ? arts.split(',').map(s=>s.trim()) : []};
+    } else if(activeQaType === 'decision') {
+      const topic = document.getElementById('qa-topic').value.trim(), decision = document.getElementById('qa-decision').value.trim();
+      const reason = document.getElementById('qa-reason').value.trim();
+      if(!topic||!decision) throw new Error('Topic and decision required');
+      endpoint = '/add_decision'; payload = {topic, decision, reason};
+    } else if(activeQaType === 'blocker') {
+      const task = document.getElementById('qa-btask').value.trim(), blocker = document.getElementById('qa-blocker').value.trim();
+      const needed = document.getElementById('qa-needed').value.trim();
+      if(!task||!blocker) throw new Error('Task and blocker required');
+      endpoint = '/add_blocker'; payload = {task, blocker, needed};
+    }
+    await api.post(endpoint, payload);
+    toast('Memory added', 'success');
+    clearQaForm();
+    await Promise.all([loadMemories(), loadSummary()]);
+  } catch(e) { toast(e.message || 'Failed', 'error'); }
+  finally {
+    btn.disabled = false;
+    const labels = {general:'Add Memory',completed:'Add Completed',decision:'Add Decision',blocker:'Add Blocker',learning:'Add Learning'};
+    btn.textContent = labels[activeQaType];
+  }
+}
+
+function clearQaForm() {
+  ['qa-text','qa-task','qa-result','qa-artifacts','qa-topic','qa-decision','qa-reason','qa-btask','qa-blocker','qa-needed','qa-learning-text'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+}
+
+// ── Context ────────────────────────────────────────────────────────────────
+async function toggleCtx() {
+  state.ctxOpen = !state.ctxOpen;
+  document.getElementById('ctx-panel').classList.toggle('open', state.ctxOpen);
+  if(state.ctxOpen) {
+    try { const d = await api.get('/context'); document.getElementById('ctx-body').textContent = d.context || '(empty)'; }
+    catch(e) { document.getElementById('ctx-body').textContent = 'Failed to load.'; }
+  }
+}
+async function copyCtx() {
+  await navigator.clipboard.writeText(document.getElementById('ctx-body').textContent);
+  toast('Copied!', 'success', 2000);
+}
+
+// ── Files ──────────────────────────────────────────────────────────────────
+async function loadFiles() {
+  try {
+    const [fd, fod, pd] = await Promise.all([api.get('/files'), api.get('/folders'), api.get('/projects')]);
+    state.files = fd.files || []; state.folders = fod.folders || []; state.projects = pd.projects || [];
+    document.getElementById('nb-files').textContent = state.files.length;
+    renderFileTree(); renderFolders(); renderProjects();
+  } catch(e) {}
+}
+
+document.getElementById('file-search').addEventListener('input', renderFileTree);
+
+function renderFileTree() {
+  const q = document.getElementById('file-search').value.toLowerCase();
+  const files = state.files.filter(f => !q || f.filename?.toLowerCase().includes(q) || f.purpose?.toLowerCase().includes(q));
+  const el = document.getElementById('file-list');
+  if(!files.length) { el.innerHTML = '<div class="empty" style="padding:20px">No files found.</div>'; return; }
+  const groups = {};
+  files.forEach(f => { const dir = f.filepath?.replace(/\/[^/]+$/,'') || '/'; if(!groups[dir]) groups[dir]=[]; groups[dir].push(f); });
+  el.innerHTML = Object.entries(groups).map(([dir,fs]) => `
+    <div class="file-dir">${esc(dir)}</div>
+    ${fs.map(f => `<div class="file-row ${state.selectedFile?.id===f.id?'active':''}" onclick="selectFile(${f.id})">
+      <span>${fileIcon(f.extension)}</span>
+      <span class="file-name">${esc(f.filename)}</span>
+    </div>`).join('')}
+  `).join('');
+}
+
+function fileIcon(ext) {
+  const m = {py:'🐍',js:'📜',ts:'📘',sh:'⚙',json:'📋',md:'📝',yml:'📋',yaml:'📋',html:'◻',css:'◼',rs:'🦀',go:'◈'};
+  return m[(ext||'').toLowerCase().replace('.','')] || '◫';
+}
+
+function selectFile(id) {
+  state.selectedFile = state.files.find(f => f.id===id);
+  renderFileTree(); renderFileDetail();
+}
+
+function renderFileDetail() {
+  const el = document.getElementById('file-detail');
+  const f = state.selectedFile;
+  if(!f) { el.innerHTML = '<div class="file-detail-empty"><span style="font-size:30px;opacity:.4">◫</span><span>Select a file</span></div>'; return; }
+  el.innerHTML = `
+    <div class="fd-path"><span>${esc(f.filepath)}</span><button class="copy-btn" onclick="navigator.clipboard.writeText('${esc(f.filepath)}')">copy</button></div>
+    <div><div class="label">Purpose</div><div style="color:var(--text-dim);font-size:13px">${esc(f.purpose||'—')}</div></div>
+    <div><div class="label">Description</div><div style="color:var(--text-dim);font-size:13px;line-height:1.55">${esc(f.description||'—')}</div></div>
+    <div><div class="label">Patterns</div><div class="tag-list">${(f.patterns||[]).length?(f.patterns.map(p=>`<span class="tag">${esc(p)}</span>`).join('')):'<span style="color:var(--text-muted);font-size:12px">None</span>'}</div></div>
+    <div><div class="label">Decisions</div><div style="display:flex;flex-direction:column;gap:4px;margin-top:4px">${(f.decisions||[]).length?(f.decisions.map(d=>`<div style="font-size:11px;color:var(--text-dim);display:flex;gap:5px"><span>⚖</span>${esc(d)}</div>`).join('')):'<span style="color:var(--text-muted);font-size:12px">None</span>'}</div></div>
+    <div><button class="btn btn-danger btn-sm" onclick="deleteFile('${esc(f.filepath)}')">🗑 Remove</button></div>
+  `;
+}
+
+async function deleteFile(fp) {
+  try { await api.post('/files/delete',{filepath:fp}); state.selectedFile=null; toast('Removed','info'); loadFiles(); } catch(e) { toast('Failed','error'); }
+}
+
+function renderFolders() {
+  const el = document.getElementById('folders-grid');
+  if(!state.folders.length) { el.innerHTML = '<div class="empty">No folders tracked.</div>'; return; }
+  el.innerHTML = state.folders.map(f => `
+    <div class="folder-card">
+      <div class="folder-path">📁 ${esc(f.path)}</div>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(f.purpose||'—')}</div>
+      ${(f.blockers||[]).map(b=>`<div style="font-size:11px;color:var(--red);display:flex;gap:5px"><span>⚡</span>${esc(b)}</div>`).join('')}
+      <div style="margin-top:10px"><button class="btn btn-danger btn-sm" onclick="deleteFolder('${esc(f.path)}')">🗑</button></div>
+    </div>`).join('');
+}
+
+async function deleteFolder(path) {
+  try { await api.post('/folders/delete',{path}); toast('Removed','info'); loadFiles(); } catch(e) { toast('Failed','error'); }
+}
+
+function renderProjects() {
+  const el = document.getElementById('projects-list');
+  if(!state.projects.length) { el.innerHTML = '<div class="empty">No projects tracked.</div>'; return; }
+  el.innerHTML = state.projects.map(p => `
+    <div class="project-card">
+      <div class="proj-name">◈ ${esc(p.name)}</div>
+      <div class="proj-root">${esc(p.root_path)}</div>
+      ${p.architecture?`<div style="font-size:12px;color:var(--text-dim);margin-bottom:8px">${esc(p.architecture)}</div>`:''}
+      ${(p.key_decisions||[]).length?`<details><summary>Key Decisions (${p.key_decisions.length})</summary><div style="margin-top:6px;display:flex;flex-direction:column;gap:3px">${p.key_decisions.map(d=>`<div style="font-size:11px;color:var(--text-dim);display:flex;gap:5px"><span>⚖</span>${esc(d)}</div>`).join('')}</div></details>`:''}
+      <div style="margin-top:12px"><button class="btn btn-danger btn-sm" onclick="deleteProject('${esc(p.name)}')">🗑 Remove</button></div>
+    </div>`).join('');
+}
+
+async function deleteProject(name) {
+  try { await api.post('/projects/delete',{name}); toast('Removed','info'); loadFiles(); } catch(e) { toast('Failed','error'); }
+}
+
+async function submitFile() {
+  const path=document.getElementById('fi-path').value.trim(), purpose=document.getElementById('fi-purpose').value.trim(), desc=document.getElementById('fi-desc').value.trim();
+  if(!path) { toast('Path required','error'); return; }
+  try { await api.post('/files/add',{filepath:path,purpose,description:desc,decisions:[],patterns:[]}); toast('Tracked!','success'); closeModal('modal-file'); loadFiles(); } catch(e) { toast('Failed','error'); }
+}
+async function submitFolder() {
+  const path=document.getElementById('fo-path').value.trim(), purpose=document.getElementById('fo-purpose').value.trim();
+  if(!path) { toast('Path required','error'); return; }
+  try { await api.post('/folders/add',{path,purpose,blockers:[]}); toast('Tracked!','success'); closeModal('modal-folder'); loadFiles(); } catch(e) { toast('Failed','error'); }
+}
+async function submitProject() {
+  const name=document.getElementById('pr-name').value.trim(), root_path=document.getElementById('pr-root').value.trim(), architecture=document.getElementById('pr-arch').value.trim();
+  if(!name) { toast('Name required','error'); return; }
+  try { await api.post('/projects/add',{name,root_path,architecture,key_decisions:[]}); toast('Added!','success'); closeModal('modal-project'); loadFiles(); } catch(e) { toast('Failed','error'); }
+}
+
+// ── Agents ─────────────────────────────────────────────────────────────────
+async function loadAgents() {
+  try {
+    const d = await api.get('/agents');
+    state.agents = d.agents||[]; state.activeAgent = d.active||'default';
+    document.getElementById('nb-agents').textContent = state.agents.length;
+    renderAgents();
+  } catch(e) {}
+}
+
+async function loadAgentSel() {
+  try {
+    const d = await api.get('/agents');
+    state.agents = d.agents||[]; state.activeAgent = d.active||'default';
+    const sel = document.getElementById('agent-selector');
+    sel.innerHTML = state.agents.map(a => `<option value="${esc(a.name)}" ${a.name===state.activeAgent?'selected':''}>${esc(a.name)}</option>`).join('');
+    if(!state.agents.length) sel.innerHTML = '<option>default</option>';
+  } catch(e) { document.getElementById('agent-selector').innerHTML = '<option>default</option>'; }
+}
+
+document.getElementById('agent-selector').addEventListener('change', async function() {
+  try {
+    await api.post('/agents/select',{name:this.value});
+    state.activeAgent = this.value;
+    toast(`Agent: ${this.value}`, 'info', 2000);
+    if(state.activePage==='agents') renderAgents();
+  } catch(e) { toast('Failed','error'); }
+});
+
+function renderAgents() {
+  const el = document.getElementById('agents-grid');
+  if(!state.agents.length) { el.innerHTML = '<div class="empty">No agents configured.</div>'; return; }
+  el.innerHTML = state.agents.map(a => {
+    const isActive = a.name===state.activeAgent;
+    const tc = 'badge-'+(a.agent_type||'custom').toLowerCase();
+    return `<div class="agent-card ${isActive?'active-agent':''}">
+      <div class="agent-name">${esc(a.name)} ${isActive?'<span class="active-badge">ACTIVE</span>':''}</div>
+      <div style="margin-bottom:8px"><span class="badge ${tc}">${(a.agent_type||'custom').toUpperCase()}</span></div>
+      ${a.model?`<div class="agent-meta">Model <code>${esc(a.model)}</code></div>`:''}
+      ${a.api_url?`<div class="agent-meta">URL <code>${esc(a.api_url.slice(0,36))}…</code></div>`:''}
+      <div class="agent-meta" style="font-size:10.5px;color:var(--text-muted);font-family:var(--mono)">Added ${relTime(new Date(a.created_at))}</div>
+      <div class="agent-actions">
+        ${!isActive?`<button class="btn btn-primary btn-sm" style="flex:1" onclick="selectAgent('${esc(a.name)}')">Select</button>`:`<button class="btn btn-ghost btn-sm" style="flex:1" disabled>Active</button>`}
+        ${a.name!=='default'?`<button class="btn btn-danger btn-sm" onclick="deleteAgent('${esc(a.name)}')">🗑</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function selectAgent(name) {
+  try { await api.post('/agents/select',{name}); state.activeAgent=name; toast(`Switched to ${name}`,'info'); loadAgents(); loadAgentSel(); } catch(e) { toast('Failed','error'); }
+}
+async function deleteAgent(name) {
+  try { await api.post('/agents/delete',{name}); toast('Deleted','info'); loadAgents(); loadAgentSel(); } catch(e) { toast('Failed','error'); }
+}
+
+let selectedAgentType = 'claude';
+document.querySelectorAll('.type-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    selectedAgentType = btn.dataset.agtype;
+    document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b===btn));
+  });
+});
+
+async function submitAgent() {
+  const name=document.getElementById('ag-name').value.trim();
+  if(!name) { toast('Name required','error'); return; }
+  if(name.includes(' ')) { toast('No spaces in name','error'); return; }
+  const btn=document.getElementById('ag-submit');
+  btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Adding…';
+  try {
+    await api.post('/agents/add',{name,type:selectedAgentType,api_key:document.getElementById('ag-key').value.trim(),api_url:document.getElementById('ag-url').value.trim(),model:document.getElementById('ag-model').value.trim(),config:{}});
+    toast('Agent added','success'); closeModal('modal-agent'); loadAgents(); loadAgentSel();
+  } catch(e) { toast('Failed','error'); }
+  finally { btn.disabled=false; btn.textContent='Add Agent'; }
+}
+
+function togglePw(id, btn) {
+  const el=document.getElementById(id); el.type=el.type==='password'?'text':'password'; btn.textContent=el.type==='password'?'👁':'🙈';
+}
+
+// ── Tokens ─────────────────────────────────────────────────────────────────
+async function loadTokens() {
+  try {
+    const [sum, daily, rec] = await Promise.all([api.get('/tokens/summary'), api.get('/tokens/daily'), api.get('/tokens/recent')]);
+    document.getElementById('t-cost').textContent = '$'+(sum.total_cost_usd||0).toFixed(4);
+    animateCount('t-reqs', sum.total_requests||0);
+    document.getElementById('t-input').textContent = fmtTok(sum.total_input_tokens);
+    document.getElementById('t-output').textContent = fmtTok(sum.total_output_tokens);
+    document.getElementById('t-saved').textContent = '$'+(sum.total_cache_savings_usd||0).toFixed(4);
+    const mr = document.getElementById('models-row');
+    mr.innerHTML = (sum.models_used||[]).length ? (sum.models_used.map(m=>`<span class="model-pill">${esc(m)}</span>`).join('')) : '<span style="color:var(--text-muted);font-size:12px">No data.</span>';
+    state.tokenEntries = rec.entries||[];
+    renderTokenTable();
+    if(daily?.daily) drawChart(daily.daily);
+  } catch(e) {}
+}
+
+function fmtTok(n) { n=n||0; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return String(n); }
+
+function renderTokenTable() {
+  const tbody = document.getElementById('token-tbody');
+  const entries = [...state.tokenEntries].sort((a,b) => {
+    let av=a[state.sortCol],bv=b[state.sortCol];
+    if(typeof av==='string') { av=av.toLowerCase(); bv=bv.toLowerCase(); }
+    return state.sortDir*(av<bv?-1:av>bv?1:0);
+  });
+  if(!entries.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">No data yet.</td></tr>'; return; }
+  tbody.innerHTML = entries.slice(0,20).map(e => `<tr>
+    <td class="mono">${relTime(new Date(e.timestamp))}</td>
+    <td class="mono">${esc(e.model||'—')}</td>
+    <td class="mono">${fmtTok(e.input_tokens)}</td>
+    <td class="mono">${fmtTok(e.output_tokens)}</td>
+    <td class="amber">$${(e.estimated_cost_usd||0).toFixed(4)}</td>
+    <td class="gr">$${(e.cache_savings_usd||0).toFixed(4)}</td>
+  </tr>`).join('');
+}
+
+document.querySelectorAll('.tbl th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col=th.dataset.col;
+    if(state.sortCol===col) state.sortDir*=-1; else { state.sortCol=col; state.sortDir=-1; }
+    renderTokenTable();
+  });
+});
+
+// ── Canvas Chart ───────────────────────────────────────────────────────────
+function drawChart(dailyObj) {
+  const canvas = document.getElementById('cost-canvas');
+  if(!canvas) return;
+  const W = canvas.parentElement.clientWidth - 32, H = 180;
+  canvas.width = W*devicePixelRatio; canvas.height = H*devicePixelRatio;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  const entries = Object.entries(dailyObj).sort(([a],[b]) => a<b?-1:1);
+  const vals = entries.map(([,v])=>v);
+  const maxV = Math.max(...vals, .001);
+  const pad = {t:16,r:16,b:36,l:56};
+  const cw = W-pad.l-pad.r, ch = H-pad.t-pad.b;
+
+  ctx.strokeStyle='#2e2b24'; ctx.lineWidth=1;
+  for(let i=0;i<=4;i++) {
+    const y = pad.t + ch*(1-i/4);
+    ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+cw,y); ctx.stroke();
+    ctx.fillStyle='#4a4538'; ctx.font='10px IBM Plex Mono,monospace'; ctx.textAlign='right';
+    ctx.fillText('$'+(maxV*i/4).toFixed(maxV<.1?4:2), pad.l-6, y+4);
+  }
+
+  if(!entries.length) { ctx.fillStyle='#4a4538'; ctx.font='13px IBM Plex Sans,sans-serif'; ctx.textAlign='center'; ctx.fillText('No data yet.',W/2,H/2); return; }
+
+  const pts = entries.map(([,v],i) => ({x:pad.l+(i/Math.max(entries.length-1,1))*cw, y:pad.t+ch*(1-v/maxV)}));
+
+  // Gradient fill
+  const grad = ctx.createLinearGradient(0,pad.t,0,pad.t+ch);
+  grad.addColorStop(0,'rgba(232,168,76,.22)');
+  grad.addColorStop(1,'rgba(232,168,76,0)');
+  ctx.beginPath(); ctx.moveTo(pts[0].x,pad.t+ch);
+  pts.forEach(p=>ctx.lineTo(p.x,p.y));
+  ctx.lineTo(pts[pts.length-1].x,pad.t+ch); ctx.closePath();
+  ctx.fillStyle=grad; ctx.fill();
+
+  // Line
+  ctx.beginPath(); ctx.strokeStyle='#e8a84c'; ctx.lineWidth=2; ctx.lineJoin='round';
+  pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y)); ctx.stroke();
+
+  // Dots
+  pts.forEach(p=>{
+    ctx.beginPath(); ctx.arc(p.x,p.y,3.5,0,Math.PI*2);
+    ctx.fillStyle='#e8a84c'; ctx.fill();
+    ctx.strokeStyle='#0c0b09'; ctx.lineWidth=1.5; ctx.stroke();
+  });
+
+  // X labels
+  ctx.fillStyle='#4a4538'; ctx.font='10px IBM Plex Mono,monospace'; ctx.textAlign='center';
+  const step = Math.max(1,Math.floor(entries.length/6));
+  entries.forEach(([date],i)=>{ if(i%step!==0&&i!==entries.length-1) return; ctx.fillText(date.slice(5),pts[i].x,H-6); });
+
+  // Hover
+  const tooltip = document.getElementById('chart-tooltip');
+  canvas.onmousemove = ev => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = ev.clientX - rect.left;
+    let ci=null, md=999;
+    pts.forEach((p,i)=>{ const d=Math.abs(p.x-mx); if(d<md){md=d;ci=i;} });
+    if(ci!==null && md<cw/entries.length) {
+      const [date,val]=entries[ci];
+      tooltip.style.display='block';
+      tooltip.style.left=(ev.clientX-50)+'px';
+      tooltip.style.top=(ev.clientY-48)+'px';
+      tooltip.innerHTML=`<strong>${date}</strong><br>$${val.toFixed(4)}`;
+    } else { tooltip.style.display='none'; }
+  };
+  canvas.onmouseleave = ()=>tooltip.style.display='none';
+}
+
+// ── Search ─────────────────────────────────────────────────────────────────
+let searchDebounce = null;
+document.getElementById('search-input').addEventListener('input', e => {
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(()=>doSearch(e.target.value), 300);
+});
+
+document.querySelectorAll('.stoggle').forEach(btn => {
+  btn.addEventListener('click', ()=>{
+    state.searchType = btn.dataset.stype;
+    document.querySelectorAll('.stoggle').forEach(b=>b.classList.toggle('active',b===btn));
+    const q = document.getElementById('search-input').value;
+    if(q) doSearch(q);
+  });
+});
+
+async function doSearch(q) {
+  const el = document.getElementById('search-results');
+  if(!q.trim()) { el.innerHTML='<div class="sr-empty">Start typing…</div>'; return; }
+  el.innerHTML='<div class="sr-empty">Searching…</div>';
+  try {
+    if(state.searchType==='memories') {
+      const d = await api.get(`/search?q=${encodeURIComponent(q)}`);
+      const r = d.results||[];
+      el.innerHTML = r.length ? r.map(m=>`<div class="sr-card">
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="badge badge-${m.type||'general'}">${TYPE_EMOJI[m.type||'general']} ${m.type||'general'}</span>
+          <span style="font-family:var(--mono);font-size:10.5px;color:var(--text-muted)">${relTime(new Date(m.timestamp))}</span>
+        </div>
+        <div class="sr-text">${esc((m.text||'').slice(0,220))}${(m.text||'').length>220?'…':''}</div>
+      </div>`).join('') : '<div class="sr-empty">No results.</div>';
+    } else {
+      const d = await api.get(`/files/search?q=${encodeURIComponent(q)}`);
+      const r = d.results||[];
+      el.innerHTML = r.length ? r.map(f=>`<div class="sr-card">
+        <div style="display:flex;gap:8px;align-items:center">
+          <span>${fileIcon(f.extension)}</span>
+          <span style="font-family:var(--mono);font-size:12px;color:var(--amber)">${esc(f.filepath)}</span>
+        </div>
+        <div class="sr-text">${esc(f.purpose||f.description||'—')}</div>
+      </div>`).join('') : '<div class="sr-empty">No files found.</div>';
+    }
+  } catch(e) { el.innerHTML='<div class="sr-empty">Search failed — is the agent running?</div>'; }
+}
+
+// ── Modals ─────────────────────────────────────────────────────────────────
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', function(e) { if(e.target===this) closeModal(this.id); });
+});
+
+// ── Settings ───────────────────────────────────────────────────────────────
+document.getElementById('settings-btn').addEventListener('click', ()=>document.getElementById('settings-overlay').classList.add('open'));
+function closeSettings() { document.getElementById('settings-overlay').classList.remove('open'); }
+function applySettings() {
+  config.apiUrl = document.getElementById('sp-url').value.trim() || 'http://127.0.0.1:8080';
+  config.pollInterval = parseInt(document.getElementById('sp-interval').value);
+  config.perPage = parseInt(document.getElementById('sp-perpage').value);
+  startPolling(); fullRefresh();
+  toast('Settings applied','success');
+  closeSettings();
+  window.parent.postMessage({type:'__edit_mode_set_keys', edits:config},'*');
+}
+
+// ── Export / Import ────────────────────────────────────────────────────────
+async function exportMemories() {
+  try {
+    const d = await api.get('/recent');
+    const blob = new Blob([JSON.stringify(d.memories||[],null,2)],{type:'application/json'});
+    const a = document.createElement('a');
+    a.href=URL.createObjectURL(blob); a.download=`memories-${new Date().toISOString().slice(0,10)}.json`; a.click();
+    toast('Export ready','success');
+  } catch(e) { toast('Export failed','error'); }
+}
+
+async function importMemories(input) {
+  const file = input.files[0]; if(!file) return;
+  try {
+    const mems = JSON.parse(await file.text()); let count=0;
+    for(const m of mems) { try { await api.post('/add',{text:m.text,type:m.type,source:m.source||'import'}); count++; } catch(e){} }
+    toast(`Imported ${count} memories`,'success'); loadMemories(); loadSummary();
+  } catch(e) { toast('Invalid JSON','error'); }
+}
+
+// ── Keyboard ───────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  const inInput = ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName);
+  if(e.key==='Escape') {
+    document.querySelectorAll('.modal-overlay.open').forEach(m=>m.classList.remove('open'));
+    document.getElementById('settings-overlay').classList.remove('open');
+    return;
+  }
+  if(e.key==='/'&&!inInput) { e.preventDefault(); navigateTo('search'); return; }
+  if((e.ctrlKey||e.metaKey)&&e.key==='n'&&!e.shiftKey) { e.preventDefault(); navigateTo('memory'); document.getElementById('qa-text').focus(); return; }
+  if(!inInput&&!e.ctrlKey&&!e.metaKey) {
+    const pages=['memory','files','agents','tokens','search'];
+    const idx=parseInt(e.key)-1;
+    if(idx>=0&&idx<pages.length) navigateTo(pages[idx]);
+  }
+});
+
+// ── Tweaks ─────────────────────────────────────────────────────────────────
+window.addEventListener('message', e => {
+  if(e.data?.type==='__activate_edit_mode') document.getElementById('settings-overlay').classList.add('open');
+  if(e.data?.type==='__deactivate_edit_mode') closeSettings();
+});
+window.parent.postMessage({type:'__edit_mode_available'},'*');
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+function esc(s) { return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function relTime(d) {
+  if(!(d instanceof Date)||isNaN(d)) return '—';
+  const s=(Date.now()-d)/1000;
+  if(s<60) return 'just now'; if(s<3600) return Math.floor(s/60)+'m ago';
+  if(s<86400) return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago';
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+navigateTo(state.activePage);
+fullRefresh();
+startPolling();
+</script>
+</body>
+</html>
