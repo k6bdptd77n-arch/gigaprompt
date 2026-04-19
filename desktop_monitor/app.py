@@ -642,7 +642,8 @@ class PtySession:
 async def pty_handler(websocket):
     # Token handshake via query string: ws://host/?token=...
     import urllib.parse as _up
-    path = getattr(websocket, 'path', '') or ''
+    req = getattr(websocket, 'request', None)
+    path = getattr(req, 'path', '') if req is not None else getattr(websocket, 'path', '') or ''
     qs = _up.urlparse(path).query
     token = _up.parse_qs(qs).get('token', [''])[0]
     if not secrets.compare_digest(token, UI_TOKEN):
