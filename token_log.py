@@ -27,7 +27,28 @@ import subprocess
 import sys
 import urllib.request
 import urllib.error
+from contextlib import contextmanager
 from datetime import datetime
+
+
+@contextmanager
+def _locked_append(path: str):
+    """Append-open a file with an exclusive advisory lock (no-op on Windows)."""
+    f = open(path, "a", encoding="utf-8")
+    try:
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass
+        yield f
+    finally:
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except (ImportError, OSError):
+            pass
+        f.close()
 
 SUPER_MEMORY_API = os.environ.get("SUPER_MEMORY_API", "http://127.0.0.1:8080")
 TOKEN_LOG_PATH = os.path.expanduser("~/.super_memory/token_log.jsonl")
@@ -64,8 +85,9 @@ def log_tokens(model: str, usage: dict, source: str = "curl"):
         "cache_savings_usd": round(cache_savings, 4),
     }
 
-    # Save locally
-    with open(TOKEN_LOG_PATH, "a", encoding="utf-8") as f:
+    # Save locally (flock guards against interleaved writes)
+    os.makedirs(os.path.dirname(TOKEN_LOG_PATH), exist_ok=True)
+    with _locked_append(TOKEN_LOG_PATH) as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     # Send to Super Memory API (optional - local log always saved)
@@ -93,13 +115,12 @@ def extract_usage_from_response(response_text: str) -> dict:
     """Try to parse usage from raw API response."""
     try:
         data = json.loads(response_text)
-        if "usage" in data:
-            return data["usage"]
-        # Maybe usage is nested in a different structure
-        if "model" in data and "messages" in str(data):
-            return data.get("usage", {})
-    except Exception:
-        pass
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    if "usage" in data:
+        return data["usage"]
+    if "model" in data and "messages" in str(data):
+        return data.get("usage", {})
     return {}
 
 
@@ -132,16 +153,13 @@ def main():
         # Try to detect JSON response
         try:
             data = json.loads(result.stdout.decode("utf-8", errors="replace"))
-            if "usage" in data:
-                usage = data["usage"]
-                if "model" in data:
-                    model = data["model"]
-            elif "error" not in data:
-                usage = {}
-            else:
-                usage = {}
-        except Exception:
-            usage = {}
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            data = None
+        usage = {}
+        if isinstance(data, dict) and "usage" in data:
+            usage = data["usage"]
+            if "model" in data:
+                model = data["model"]
 
         if usage:
             entry = log_tokens(model, usage, source)

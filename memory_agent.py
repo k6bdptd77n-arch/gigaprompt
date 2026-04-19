@@ -10,11 +10,39 @@ import json
 import os
 import sys
 import hashlib
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 import threading
+
+
+@contextmanager
+def _locked_append(path):
+    """Append-open a file with an exclusive advisory lock (no-op on Windows)."""
+    f = open(path, "a", encoding="utf-8")
+    try:
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass
+        yield f
+    finally:
+        try:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except (ImportError, OSError):
+            pass
+        f.close()
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """Handle each request in a new daemon thread."""
+    daemon_threads = True
+    allow_reuse_address = True
 
 # Database
 DB_PATH = Path.home() / ".super_memory" / "memory.db"
@@ -144,9 +172,10 @@ def log_token_usage(model: str, usage: dict, source: str = "api"):
     }
 
     try:
-        with open(TOKEN_LOG_PATH, "a", encoding="utf-8") as f:
+        TOKEN_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _locked_append(str(TOKEN_LOG_PATH)) as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception:
+    except OSError:
         pass
 
     return entry
@@ -171,7 +200,7 @@ def get_token_summary() -> dict:
                         continue
                     try:
                         e = json.loads(line)
-                    except:
+                    except (json.JSONDecodeError, ValueError):
                         continue
                     total_input += e.get("input_tokens", 0)
                     total_output += e.get("output_tokens", 0)
@@ -181,7 +210,7 @@ def get_token_summary() -> dict:
                     entries += 1
                     day = e.get("timestamp", "")[:10]
                     daily_costs[day] = daily_costs.get(day, 0) + e.get("estimated_cost_usd", 0)
-        except Exception:
+        except OSError:
             pass
 
     return {
@@ -311,9 +340,9 @@ class MemoryHandler(BaseHTTPRequestHandler):
                             continue
                         try:
                             entries.append(json.loads(line))
-                        except:
+                        except (json.JSONDecodeError, ValueError):
                             continue
-                except Exception:
+                except OSError:
                     pass
             self.send_json({"entries": entries})
         
@@ -430,7 +459,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
         
         try:
             data = json.loads(body) if body else {}
-        except:
+        except (json.JSONDecodeError, ValueError):
             data = {}
         
         conn = get_db()
@@ -690,7 +719,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
 def run_server(port=8080):
     """Run the HTTP server."""
     init_db()
-    server = HTTPServer(('127.0.0.1', port), MemoryHandler)
+    server = ThreadingHTTPServer(('127.0.0.1', port), MemoryHandler)
     print(f"Super Memory Agent running on http://127.0.0.1:{port}")
     print(f"DB: {DB_PATH}")
     print("\nEndpoints:")

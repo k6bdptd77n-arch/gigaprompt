@@ -77,7 +77,7 @@ mem() {
             ;;
         done|completed)
             shift
-            curl -s -X POST "$MEMERY_API/add_completed" \
+            curl -s -X POST "$MEMORY_API/add_completed" \
                 -H "Content-Type: application/json" \
                 -d "{\"task\": \"$*\"}" > /dev/null 2>&1
             echo -e "${GREEN}✅ Completed: $*${NC}"

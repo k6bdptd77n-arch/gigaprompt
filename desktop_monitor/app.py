@@ -2,46 +2,106 @@
 """
 Super Memory Desktop Monitor
 ============================
-Flask + WebSocket PTY terminal for Super Memory project.
+Flask + WebSocket (JSON-protocol) multi-session PTY terminal.
 """
 
 import os
 import sys
+import json
+import secrets
+import shutil
+import sqlite3
+import subprocess
 import threading
 import asyncio
+import platform
+import time
+import uuid
+from functools import wraps
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 import requests
 
-app = Flask(__name__, template_folder='templates')
+BASE_DIR = Path(__file__).resolve().parent
+STATIC_DIR = BASE_DIR / 'static'
+
+app = Flask(__name__, template_folder=str(BASE_DIR / 'templates'), static_folder=None)
 
 SUPER_MEMORY_API = os.environ.get('SUPER_MEMORY_API', 'http://127.0.0.1:8080')
-TOKEN_LOG_PATH = os.path.expanduser('~/.super_memory/token_log.jsonl')
-MEMORY_DB_PATH = os.path.expanduser('~/.super_memory/memory.db')
+SUPER_MEMORY_HOME = Path(os.environ.get('SUPER_MEMORY_HOME', Path.home() / '.super_memory'))
+TOKEN_LOG_PATH = SUPER_MEMORY_HOME / 'token_log.jsonl'
+MEMORY_DB_PATH = SUPER_MEMORY_HOME / 'memory.db'
+API_TOKEN_PATH = SUPER_MEMORY_HOME / 'ui_token'
+
+IS_WINDOWS = platform.system() == 'Windows'
+
+
+# ============================================================
+# UI auth token (shared between REST + WS)
+# ============================================================
+
+def _load_or_create_token() -> str:
+    SUPER_MEMORY_HOME.mkdir(parents=True, exist_ok=True)
+    if API_TOKEN_PATH.exists():
+        token = API_TOKEN_PATH.read_text(encoding='utf-8').strip()
+        if token:
+            return token
+    token = secrets.token_urlsafe(32)
+    API_TOKEN_PATH.write_text(token, encoding='utf-8')
+    try:
+        os.chmod(API_TOKEN_PATH, 0o600)
+    except OSError:
+        pass
+    return token
+
+
+UI_TOKEN = _load_or_create_token()
+
+
+def _token_from_request() -> str:
+    auth = request.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        return auth[7:].strip()
+    return request.args.get('token', '') or request.headers.get('X-UI-Token', '')
+
+
+def require_token(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not secrets.compare_digest(_token_from_request(), UI_TOKEN):
+            return jsonify({'error': 'unauthorized'}), 401
+        return view(*args, **kwargs)
+    return wrapper
 
 
 # ============================================================
 # Helpers
 # ============================================================
 
-def get_memory_summary():
+def _get(path: str, timeout: float = 2.0):
     try:
-        r = requests.get(f'{SUPER_MEMORY_API}/summary', timeout=2)
-        return r.json() if r.status_code == 200 else {}
-    except Exception:
-        return {}
+        r = requests.get(f'{SUPER_MEMORY_API}{path}', timeout=timeout)
+        if r.status_code == 200:
+            return r.json()
+    except (requests.RequestException, ValueError):
+        return None
+    return None
 
 
-def get_token_summary():
-    total_input = total_output = total_cost = 0.0
-    total_cache_savings = 0.0
-    entries = 0
-    models = set()
-    daily_costs = {}
+def get_memory_summary() -> dict:
+    return _get('/summary') or {}
 
-    if os.path.exists(TOKEN_LOG_PATH):
+
+def get_token_summary() -> dict:
+    total_input = total_output = entries = 0
+    total_cost = total_cache_savings = 0.0
+    models: set = set()
+    daily_costs: dict = {}
+
+    if TOKEN_LOG_PATH.exists():
         try:
             with open(TOKEN_LOG_PATH, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -49,19 +109,18 @@ def get_token_summary():
                     if not line:
                         continue
                     try:
-                        import json
                         e = json.loads(line)
-                        total_input += e.get('input_tokens', 0)
-                        total_output += e.get('output_tokens', 0)
-                        total_cost += e.get('estimated_cost_usd', 0)
-                        total_cache_savings += e.get('cache_savings_usd', 0)
-                        models.add(e.get('model', 'unknown'))
-                        entries += 1
-                        day = e.get('timestamp', '')[:10]
-                        daily_costs[day] = daily_costs.get(day, 0) + e.get('estimated_cost_usd', 0)
-                    except Exception:
+                    except (json.JSONDecodeError, ValueError):
                         continue
-        except Exception:
+                    total_input += e.get('input_tokens', 0)
+                    total_output += e.get('output_tokens', 0)
+                    total_cost += e.get('estimated_cost_usd', 0)
+                    total_cache_savings += e.get('cache_savings_usd', 0)
+                    models.add(e.get('model', 'unknown'))
+                    entries += 1
+                    day = e.get('timestamp', '')[:10]
+                    daily_costs[day] = daily_costs.get(day, 0) + e.get('estimated_cost_usd', 0)
+        except OSError:
             pass
 
     return {
@@ -70,26 +129,22 @@ def get_token_summary():
         'total_output_tokens': int(total_output),
         'total_cost_usd': round(total_cost, 4),
         'total_cache_savings_usd': round(total_cache_savings, 0),
-        'models_used': list(models),
+        'models_used': sorted(models),
         'daily_costs': {k: round(v, 4) for k, v in sorted(daily_costs.items())},
     }
 
 
-def get_agent_status():
-    try:
-        r = requests.get(f'{SUPER_MEMORY_API}/health', timeout=2)
-        return r.status_code == 200
-    except Exception:
-        return False
+def get_agent_status() -> bool:
+    return _get('/health') is not None
 
 
 # ============================================================
-# Flask Routes
+# Page + static routes
 # ============================================================
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    return render_template('index.html', ui_token=UI_TOKEN)
 
 
 @app.route('/setup')
@@ -97,21 +152,23 @@ def setup():
     return render_template('setup.html')
 
 
-@app.route('/api/ui/data')
-def ui_data():
-    summary = get_memory_summary()
-    tokens = get_token_summary()
-    recent = []
-    try:
-        r = requests.get(f'{SUPER_MEMORY_API}/recent', timeout=2)
-        recent = r.json().get('memories', []) if r.status_code == 200 else []
-    except Exception:
-        pass
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    return send_from_directory(str(STATIC_DIR), filename)
 
+
+# ============================================================
+# Dashboard API
+# ============================================================
+
+@app.route('/api/ui/data')
+@require_token
+def ui_data():
+    recent = _get('/recent') or {}
     return jsonify({
-        'memory': summary,
-        'tokens': tokens,
-        'recent': recent[-10:],
+        'memory': get_memory_summary(),
+        'tokens': get_token_summary(),
+        'recent': (recent.get('memories') or [])[-10:],
         'agent_ok': get_agent_status(),
         'db_path': str(MEMORY_DB_PATH),
         'token_log_path': str(TOKEN_LOG_PATH),
@@ -119,60 +176,45 @@ def ui_data():
 
 
 @app.route('/api/project/summary')
+@require_token
 def project_summary():
-    import sqlite3
-
     try:
-        conn = sqlite3.connect(str(MEMORY_DB_PATH))
+        conn = sqlite3.connect(f'file:{MEMORY_DB_PATH}?mode=ro', uri=True)
         conn.row_factory = sqlite3.Row
         cursor = conn.execute(
             "SELECT id, text, type, timestamp, metadata, search_text FROM memories ORDER BY id DESC LIMIT 50"
         )
         rows = [dict(row) for row in cursor.fetchall()]
         conn.close()
-
-        blockers = [r for r in rows if r['type'] == 'blocker']
-        completed = [r for r in rows if r['type'] == 'completed']
-        decisions = [r for r in rows if r['type'] == 'decision']
-        learnings = [r for r in rows if r['type'] == 'learning']
-        general = [r for r in rows if r['type'] == 'general']
-
-        context_text = ''
-        try:
-            ctx_r = requests.get(f'{SUPER_MEMORY_API}/context', timeout=2)
-            if ctx_r.status_code == 200:
-                context_text = ctx_r.json().get('context', '')
-        except Exception:
-            pass
-
-        tokens = get_token_summary()
-
-        return jsonify({
-            'blockers': blockers,
-            'completed': completed,
-            'decisions': decisions,
-            'learnings': learnings,
-            'general': general,
-            'context': context_text,
-            'totals': {
-                'blockers': len(blockers),
-                'completed': len(completed),
-                'decisions': len(decisions),
-                'learnings': len(learnings),
-                'general': len(general),
-            },
-            'daily_cost': tokens.get('daily_costs', {}),
-            'total_cost': tokens.get('total_cost_usd', 0),
-            'agent_ok': get_agent_status(),
-        })
-    except Exception as e:
+    except sqlite3.Error as e:
         return jsonify({'error': str(e)}), 500
+
+    by_type = {'blocker': [], 'completed': [], 'decision': [], 'learning': [], 'general': []}
+    for r in rows:
+        by_type.setdefault(r['type'], []).append(r)
+
+    ctx = _get('/context') or {}
+    tokens = get_token_summary()
+
+    return jsonify({
+        'blockers': by_type['blocker'],
+        'completed': by_type['completed'],
+        'decisions': by_type['decision'],
+        'learnings': by_type['learning'],
+        'general': by_type['general'],
+        'context': ctx.get('context', ''),
+        'totals': {k: len(v) for k, v in by_type.items()},
+        'daily_cost': tokens.get('daily_costs', {}),
+        'total_cost': tokens.get('total_cost_usd', 0),
+        'agent_ok': get_agent_status(),
+    })
 
 
 @app.route('/api/tokens/recent')
+@require_token
 def tokens_recent():
     entries = []
-    if os.path.exists(TOKEN_LOG_PATH):
+    if TOKEN_LOG_PATH.exists():
         try:
             with open(TOKEN_LOG_PATH, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
@@ -181,292 +223,563 @@ def tokens_recent():
                 if not line:
                     continue
                 try:
-                    import json
                     entries.append(json.loads(line))
-                except Exception:
+                except (json.JSONDecodeError, ValueError):
                     continue
-        except Exception:
+        except OSError:
             pass
     return jsonify({'entries': entries})
 
 
+@app.route('/api/tokens/summary')
+@require_token
+def tokens_summary_route():
+    return jsonify(get_token_summary())
+
+
+# ============================================================
+# Memory proxies (so UI shares the UI token, not the raw API)
+# ============================================================
+
+_PROXY_GET = {
+    'summary': '/summary',
+    'recent': '/recent',
+    'search': '/search',
+    'context': '/context',
+    'files_list': '/files/list',
+    'files_search': '/files/search',
+    'folders_list': '/folders/list',
+    'projects_list': '/projects/list',
+    'tokens_daily': '/tokens/daily',
+    'tokens_api_summary': '/tokens/summary',
+    'file_context': '/file_context',
+    'health': '/health',
+}
+
+_PROXY_POST = {
+    'add': '/add',
+    'add_completed': '/add_completed',
+    'add_decision': '/add_decision',
+    'add_blocker': '/add_blocker',
+    'files_add': '/files/add',
+    'files_delete': '/files/delete',
+    'folders_add': '/folders/add',
+    'folders_delete': '/folders/delete',
+    'projects_add': '/projects/add',
+    'projects_delete': '/projects/delete',
+}
+
+
+@app.route('/api/proxy/<name>', methods=['GET'])
+@require_token
+def proxy_get(name):
+    upstream = _PROXY_GET.get(name)
+    if not upstream:
+        return jsonify({'error': 'unknown proxy'}), 404
+    try:
+        r = requests.get(f'{SUPER_MEMORY_API}{upstream}', params=request.args, timeout=5)
+        return (r.text, r.status_code, {'Content-Type': r.headers.get('Content-Type', 'application/json')})
+    except requests.RequestException as e:
+        return jsonify({'error': str(e)}), 502
+
+
+@app.route('/api/proxy/<name>', methods=['POST'])
+@require_token
+def proxy_post(name):
+    upstream = _PROXY_POST.get(name)
+    if not upstream:
+        return jsonify({'error': 'unknown proxy'}), 404
+    try:
+        r = requests.post(f'{SUPER_MEMORY_API}{upstream}', json=request.get_json(silent=True) or {}, timeout=5)
+        return (r.text, r.status_code, {'Content-Type': r.headers.get('Content-Type', 'application/json')})
+    except requests.RequestException as e:
+        return jsonify({'error': str(e)}), 502
+
+
+# ============================================================
+# Read-only SQL playground (authorizer + URI ro mode)
+# ============================================================
+
+_ALLOWED_SQL_OPS = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION}
+
+
+def _sql_authorizer(action, *_args):
+    return sqlite3.SQLITE_OK if action in _ALLOWED_SQL_OPS else sqlite3.SQLITE_DENY
+
+
 @app.route('/api/sql/query', methods=['POST'])
+@require_token
 def sql_query():
-    import sqlite3
-
-    data = request.get_json() or {}
-    query = data.get('query', '').strip()
-
+    data = request.get_json(silent=True) or {}
+    query = (data.get('query') or '').strip().rstrip(';')
     if not query:
         return jsonify({'error': 'Query is required'}), 400
-
-    if not query.upper().startswith('SELECT'):
-        return jsonify({'error': 'Only SELECT queries are allowed'}), 400
+    if ';' in query:
+        return jsonify({'error': 'Multiple statements are not allowed'}), 400
 
     try:
-        conn = sqlite3.connect(str(MEMORY_DB_PATH))
+        conn = sqlite3.connect(f'file:{MEMORY_DB_PATH}?mode=ro', uri=True)
         conn.row_factory = sqlite3.Row
+        conn.set_authorizer(_sql_authorizer)
         cursor = conn.execute(query)
-        rows = [dict(row) for row in cursor.fetchall()]
-        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+        rows = [dict(row) for row in cursor.fetchmany(500)]
+        columns = [d[0] for d in cursor.description] if cursor.description else []
         conn.close()
         return jsonify({'columns': columns, 'rows': rows, 'count': len(rows)})
-    except Exception as e:
+    except sqlite3.Error as e:
         return jsonify({'error': str(e)}), 400
 
 
 @app.route('/api/sql/schema')
+@require_token
 def sql_schema():
-    import sqlite3
     try:
-        conn = sqlite3.connect(str(MEMORY_DB_PATH))
+        conn = sqlite3.connect(f'file:{MEMORY_DB_PATH}?mode=ro', uri=True)
         cursor = conn.execute("SELECT sql FROM sqlite_master WHERE type='table'")
         schemas = [row[0] for row in cursor.fetchall() if row[0]]
         conn.close()
         return jsonify({'schemas': schemas})
-    except Exception as e:
+    except sqlite3.Error as e:
         return jsonify({'error': str(e)}), 400
 
 
+# ============================================================
+# One-shot mem CLI runner (kept for quick inline commands)
+# ============================================================
+
+def _resolve_mem_script() -> Path:
+    candidates = [
+        SUPER_MEMORY_HOME / 'mem',
+        Path(__file__).resolve().parent.parent / 'mem',
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return candidates[0]
+
+
 @app.route('/api/cli/run', methods=['POST'])
+@require_token
 def cli_run():
-    import subprocess
-
-    data = request.get_json() or {}
-    cmd = data.get('command', '').strip()
-
+    data = request.get_json(silent=True) or {}
+    cmd = (data.get('command') or '').strip()
     if not cmd:
         return jsonify({'error': 'Command is required'}), 400
-
     if cmd.startswith('mem '):
-        args = cmd[4:].strip()
-    else:
-        args = cmd
+        cmd = cmd[4:].strip()
 
+    import shlex
     try:
-        env = os.environ.copy()
-        env['PYTHONIOENCODING'] = 'utf-8'
-        env['SUPER_MEMORY_API'] = SUPER_MEMORY_API
+        args = shlex.split(cmd)
+    except ValueError as e:
+        return jsonify({'error': f'Bad command: {e}'}), 400
 
-        python_exe = r'C:\Program Files\Python311\python'
-        mem_script = os.path.expanduser(r'~/.super_memory/mem')
+    env = os.environ.copy()
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['SUPER_MEMORY_API'] = SUPER_MEMORY_API
 
-        import shlex
+    mem_script = str(_resolve_mem_script())
+    try:
         result = subprocess.run(
-            [python_exe, mem_script] + shlex.split(args),
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=15,
+            [sys.executable, mem_script, *args],
+            capture_output=True, text=True, env=env, timeout=15,
         )
         return jsonify({
             'stdout': result.stdout,
             'stderr': result.stderr,
             'exit_code': result.returncode,
         })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'Command timed out'}), 504
+    except OSError as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # ============================================================
-# WebSocket PTY Terminal
+# Agent lifecycle proxies
 # ============================================================
 
-async def pty_terminal_handler(websocket):
-    import queue, threading, os, platform
-
-    cols, rows = 120, 30
-    out_queue = queue.Queue()
-    stop_event = threading.Event()
-
-    env = {
-        'TERM': 'xterm-256color',
-        'PYTHONIOENCODING': 'utf-8',
-        'SUPER_MEMORY_API': SUPER_MEMORY_API,
-        'PATH': os.environ.get('PATH', ''),
-    }
-
-    proc = None
-    is_windows = platform.system() == 'Windows'
-
+def _launcher_call(action: str):
     try:
-        if is_windows:
+        from daemon import launcher
+    except ImportError as e:
+        return {'error': f'launcher unavailable: {e}'}, 500
+    fn = getattr(launcher, action, None)
+    if not callable(fn):
+        return {'error': f'unknown action: {action}'}, 404
+    try:
+        result = fn()
+    except Exception as e:  # launcher swallows most errors already
+        return {'error': str(e)}, 500
+    return {'ok': True, 'result': result}, 200
+
+
+@app.route('/api/agent/status')
+@require_token
+def agent_status_route():
+    return jsonify({'running': get_agent_status()})
+
+
+@app.route('/api/agent/<action>', methods=['POST'])
+@require_token
+def agent_action(action):
+    if action not in {'start', 'stop', 'restart', 'install_service'}:
+        return jsonify({'error': 'unknown action'}), 404
+    body, status = _launcher_call(action)
+    return jsonify(body), status
+
+
+# ============================================================
+# Multi-session PTY over a single WebSocket (JSON protocol)
+# ============================================================
+
+class PtySession:
+    """One pseudo-terminal owned by a single websocket client."""
+
+    def __init__(self, sid: str, shell: str, cols: int, rows: int, loop, send_coro):
+        self.id = sid
+        self.shell = shell
+        self.cols = cols
+        self.rows = rows
+        self.started_at = time.time()
+        self.stop_event = threading.Event()
+        self._loop = loop
+        self._send_coro = send_coro
+        self.proc = None
+        self.pid = None
+        self.fd = None
+        self._reader = None
+        self._spawn()
+
+    # ---- platform spawn ----
+    def _spawn(self):
+        env = os.environ.copy()
+        env.update({
+            'TERM': 'xterm-256color',
+            'PYTHONIOENCODING': 'utf-8',
+            'COLUMNS': str(self.cols),
+            'LINES': str(self.rows),
+            'SUPER_MEMORY_API': SUPER_MEMORY_API,
+        })
+        argv = self._argv()
+
+        if IS_WINDOWS:
             try:
-                import winpty
-                proc = winpty.PtyProcess.spawn(
-                    [r'C:\Program Files\Git\usr\bin\bash.exe', '-l'],
-                    dimensions=(rows, cols),
-                    env=env,
+                import winpty  # type: ignore
+                self.proc = winpty.PtyProcess.spawn(argv, dimensions=(self.rows, self.cols), env=env)
+                self._kind = 'winpty'
+            except ImportError:
+                self.proc = subprocess.Popen(
+                    argv, env=env,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 )
-            except Exception:
-                import subprocess
-                proc = subprocess.Popen(
-                    ['cmd.exe', '/q'],
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    stdin=subprocess.PIPE,
-                )
-                proc.is_subprocess = True
+                self._kind = 'subprocess'
+            self._reader = threading.Thread(target=self._pump_windows, daemon=True)
         else:
             import pty
             pid, fd = pty.fork()
             if pid == 0:
-                os.execvp('/bin/bash', ['/bin/bash', '-l'])
+                try:
+                    os.execvpe(argv[0], argv, env)
+                finally:
+                    os._exit(127)
+            self.pid = pid
+            self.fd = fd
+            self._kind = 'posix'
+            self._apply_winsize()
+            self._reader = threading.Thread(target=self._pump_posix, daemon=True)
+
+        self._reader.start()
+
+    def _argv(self):
+        if self.shell == 'mem':
+            mem_script = str(_resolve_mem_script())
+            return [sys.executable, '-u', mem_script, 'help'] if not Path(mem_script).exists() else \
+                   [sys.executable, '-i', '-c',
+                    f"import sys,subprocess; print('Super Memory CLI. Type a mem subcommand, e.g. `help`.'); "
+                    f"\nwhile True:\n  try: line=input('mem> ')\n  except EOFError: break\n"
+                    f"  if not line.strip(): continue\n  if line.strip() in ('exit','quit'): break\n"
+                    f"  subprocess.call([sys.executable, {mem_script!r}] + line.split())"]
+        # default: login shell
+        shell_path = None
+        if IS_WINDOWS:
+            shell_path = shutil.which('bash') or shutil.which('cmd')
+            if not shell_path:
+                shell_path = 'cmd.exe'
+            return [shell_path]
+        shell_path = os.environ.get('SHELL') or shutil.which('bash') or shutil.which('sh') or '/bin/sh'
+        return [shell_path, '-l']
+
+    def _apply_winsize(self):
+        if self.fd is None:
+            return
+        try:
+            import fcntl, termios, struct
+            fcntl.ioctl(self.fd, termios.TIOCSWINSZ,
+                        struct.pack('HHHH', self.rows, self.cols, 0, 0))
+        except (ImportError, OSError):
+            pass
+
+    # ---- reader threads ----
+    def _deliver(self, data: bytes):
+        try:
+            text = data.decode('utf-8', errors='replace')
+        except UnicodeDecodeError:
+            text = data.decode('latin-1', errors='replace')
+        msg = json.dumps({'type': 'output', 'id': self.id, 'data': text}, ensure_ascii=False)
+        asyncio.run_coroutine_threadsafe(self._send_coro(msg), self._loop)
+
+    def _emit_exit(self, code: int):
+        msg = json.dumps({'type': 'exit', 'id': self.id, 'code': code})
+        try:
+            asyncio.run_coroutine_threadsafe(self._send_coro(msg), self._loop)
+        except RuntimeError:
+            pass
+
+    def _pump_posix(self):
+        import select
+        code = 0
+        try:
+            while not self.stop_event.is_set():
+                r, _, _ = select.select([self.fd], [], [], 0.2)
+                if not r:
+                    continue
+                try:
+                    data = os.read(self.fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                self._deliver(data)
+        finally:
+            try:
+                _, status = os.waitpid(self.pid, os.WNOHANG)
+                if os.WIFEXITED(status):
+                    code = os.WEXITSTATUS(status)
+            except OSError:
+                pass
+            self.stop_event.set()
+            self._emit_exit(code)
+
+    def _pump_windows(self):
+        code = 0
+        try:
+            while not self.stop_event.is_set():
+                if self._kind == 'winpty':
+                    try:
+                        data = self.proc.read(4096)
+                    except Exception:
+                        break
+                    if not data:
+                        break
+                    self._deliver(data.encode('utf-8') if isinstance(data, str) else data)
+                else:
+                    data = self.proc.stdout.read(4096)
+                    if not data:
+                        break
+                    self._deliver(data)
+        finally:
+            try:
+                if self._kind == 'winpty':
+                    code = self.proc.exitstatus or 0
+                else:
+                    code = self.proc.wait(timeout=1) or 0
+            except Exception:
+                pass
+            self.stop_event.set()
+            self._emit_exit(code)
+
+    # ---- input / resize / close ----
+    def write(self, text: str):
+        data = text.encode('utf-8')
+        if IS_WINDOWS:
+            if self._kind == 'winpty':
+                self.proc.write(text)
             else:
-                class PtyProcess:
-                    def __init__(self, pid, fd):
-                        self.pid = pid
-                        self.fd = fd
-                    def read(self, size):
-                        return os.read(self.fd, size)
-                    def write(self, data):
-                        return os.write(self.fd, data)
-                    def kill(self):
-                        os.kill(self.pid, 9)
-                        os.close(self.fd)
-                    def wait(self):
-                        os.waitpid(self.pid, 0)
-                proc = PtyProcess(pid, fd)
-    except Exception as e:
-        await websocket.send(f'\r\n\x1b[31mFailed to start shell: {e}\x1b[0m\r\n')
+                self.proc.stdin.write(data)
+                self.proc.stdin.flush()
+        else:
+            try:
+                os.write(self.fd, data)
+            except OSError:
+                self.stop_event.set()
+
+    def resize(self, cols: int, rows: int):
+        self.cols, self.rows = cols, rows
+        if IS_WINDOWS and self._kind == 'winpty':
+            try:
+                self.proc.setwinsize(rows, cols)
+            except Exception:
+                pass
+        else:
+            self._apply_winsize()
+
+    def close(self):
+        self.stop_event.set()
+        try:
+            if IS_WINDOWS:
+                if self._kind == 'winpty':
+                    self.proc.terminate(force=True)
+                else:
+                    self.proc.kill()
+            else:
+                os.kill(self.pid, 9)
+                os.close(self.fd)
+        except (OSError, ProcessLookupError):
+            pass
+
+    def info(self):
+        return {
+            'id': self.id,
+            'shell': self.shell,
+            'cols': self.cols,
+            'rows': self.rows,
+            'started_at': self.started_at,
+            'alive': not self.stop_event.is_set(),
+        }
+
+
+async def pty_handler(websocket):
+    # Token handshake via query string: ws://host/?token=...
+    import urllib.parse as _up
+    req = getattr(websocket, 'request', None)
+    path = getattr(req, 'path', '') if req is not None else getattr(websocket, 'path', '') or ''
+    qs = _up.urlparse(path).query
+    token = _up.parse_qs(qs).get('token', [''])[0]
+    if not secrets.compare_digest(token, UI_TOKEN):
+        try:
+            await websocket.send(json.dumps({'type': 'error', 'code': 'unauthorized'}))
+        finally:
+            await websocket.close(code=4401)
         return
 
-    def reader_thread():
-        """Read from PTY and put in queue"""
+    loop = asyncio.get_running_loop()
+    sessions: dict = {}
+    lock = threading.Lock()
+
+    async def send(payload):
         try:
-            while not stop_event.is_set():
-                try:
-                    if is_windows and hasattr(proc, 'is_subprocess'):
-                        data = proc.stdout.read(4096)
-                        if data:
-                            out_queue.put(data)
-                        else:
-                            break
-                    elif is_windows:
-                        data = proc.read(4096)
-                        if data:
-                            out_queue.put(data)
-                        else:
-                            break
-                    else:
-                        import select
-                        r, _, _ = select.select([proc.fd], [], [], 0.1)
-                        if r:
-                            data = os.read(proc.fd, 4096)
-                            if data:
-                                out_queue.put(data)
-                            else:
-                                break
-                except Exception:
-                    break
+            await websocket.send(payload)
         except Exception:
             pass
-        finally:
-            stop_event.set()
 
-    reader = threading.Thread(target=reader_thread, daemon=True)
-    reader.start()
-
-    async def pump_input():
-        try:
-            async for msg in websocket:
-                if is_windows and hasattr(proc, 'is_subprocess'):
-                    proc.stdin.write(msg.encode())
-                    proc.stdin.flush()
-                else:
-                    proc.write(msg)
-        except Exception:
-            pass
-        finally:
-            stop_event.set()
-            try:
-                proc.kill()
-            except Exception:
-                pass
-
-    async def pump_output():
-        try:
-            while not stop_event.is_set():
-                try:
-                    data = out_queue.get(timeout=0.05)
-                    if data:
-                        await websocket.send(data)
-                except queue.Empty:
-                    await asyncio.sleep(0.02)
-                    continue
-                except Exception:
-                    break
-        except Exception:
-            pass
-        finally:
-            stop_event.set()
-            try:
-                proc.kill()
-            except Exception:
-                pass
+    async def send_list():
+        with lock:
+            items = [s.info() for s in sessions.values()]
+        await send(json.dumps({'type': 'sessions', 'items': items}))
 
     try:
-        await asyncio.gather(pump_output(), pump_input())
-    except Exception:
-        stop_event.set()
-        try:
-            proc.kill()
-            if not is_windows and hasattr(proc, 'wait'):
-                proc.wait()
-        except Exception:
-            pass
+        async for raw in websocket:
+            try:
+                msg = json.loads(raw) if isinstance(raw, str) else json.loads(raw.decode('utf-8'))
+            except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+                await send(json.dumps({'type': 'error', 'code': 'bad_json'}))
+                continue
 
+            mtype = msg.get('type')
+            sid = msg.get('id') or ''
+
+            if mtype == 'open':
+                sid = sid or uuid.uuid4().hex[:8]
+                shell = msg.get('shell', 'bash')
+                cols = int(msg.get('cols') or 120)
+                rows = int(msg.get('rows') or 30)
+                try:
+                    sess = PtySession(sid, shell, cols, rows, loop, send)
+                except OSError as e:
+                    await send(json.dumps({'type': 'error', 'id': sid, 'code': 'spawn_failed', 'message': str(e)}))
+                    continue
+                with lock:
+                    sessions[sid] = sess
+                await send(json.dumps({'type': 'opened', 'id': sid, 'shell': shell, 'cols': cols, 'rows': rows}))
+                await send_list()
+
+            elif mtype == 'input':
+                sess = sessions.get(sid)
+                if sess:
+                    sess.write(msg.get('data', ''))
+
+            elif mtype == 'resize':
+                sess = sessions.get(sid)
+                if sess:
+                    sess.resize(int(msg.get('cols') or sess.cols), int(msg.get('rows') or sess.rows))
+
+            elif mtype == 'close':
+                sess = sessions.pop(sid, None)
+                if sess:
+                    sess.close()
+                await send_list()
+
+            elif mtype == 'list':
+                await send_list()
+
+            elif mtype == 'ping':
+                await send(json.dumps({'type': 'pong', 't': time.time()}))
+
+            else:
+                await send(json.dumps({'type': 'error', 'code': 'unknown_type', 'received': mtype}))
+    except Exception:
+        pass
+    finally:
+        with lock:
+            items = list(sessions.values())
+            sessions.clear()
+        for s in items:
+            s.close()
+
+
+@app.route('/api/terminals')
+@require_token
+def terminals_list():
+    # Session state lives per-websocket; expose a stub so UI can detect the feature.
+    return jsonify({'multiplexed': True, 'protocol': 'json'})
+
+
+# ============================================================
+# Servers
+# ============================================================
 
 def start_websocket_server():
-    import websockets, threading
+    import websockets
 
     async def run():
-        async with websockets.serve(pty_terminal_handler, '127.0.0.1', 5001):
+        async with websockets.serve(pty_handler, '127.0.0.1', 5001):
             await asyncio.Future()
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
-    def run_loop():
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(run())
-
-    t = threading.Thread(target=run_loop, daemon=True)
-    t.start()
-    # Keep thread alive
-    while t.is_alive():
-        t.join(timeout=1)
+    loop.run_until_complete(run())
 
 
 def start_flask():
-    app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False)
+    app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False, threaded=True)
 
 
 def main():
-    import time
     import webbrowser
 
     print('Starting Super Memory Desktop Monitor...')
+    print(f'UI token: {UI_TOKEN[:6]}… (stored at {API_TOKEN_PATH})')
 
-    # Start WebSocket server in background thread
     ws_thread = threading.Thread(target=start_websocket_server, daemon=True)
     ws_thread.start()
     print('WebSocket terminal server on ws://127.0.0.1:5001')
 
-    # Start Flask
-    t = threading.Thread(target=start_flask, daemon=True)
-    t.start()
+    flask_thread = threading.Thread(target=start_flask, daemon=True)
+    flask_thread.start()
 
     time.sleep(1.5)
 
-    url = 'http://127.0.0.1:5000'
+    url = f'http://127.0.0.1:5000/?token={UI_TOKEN}'
     print(f'Opening browser at {url}')
     webbrowser.open(url)
 
     print('Flask running. Press Ctrl+C to stop.')
-    while True:
-        time.sleep(3600)
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == '__main__':
