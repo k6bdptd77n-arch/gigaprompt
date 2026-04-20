@@ -104,8 +104,7 @@ install_files() {
     
     # Optional but useful
     download_file "hook.sh" && chmod +x "$INSTALL_DIR/hook.sh"
-    download_file "context_inject.py" && chmod +x "$INSTALL_DIR/context_inject.py"
-    download_file "token_log.py" && chmod +x "$INSTALL_DIR/token_log.py"
+download_file "token_log.py" && chmod +x "$INSTALL_DIR/token_log.py"
     
     # Daemon files
     mkdir -p "$INSTALL_DIR/daemon"

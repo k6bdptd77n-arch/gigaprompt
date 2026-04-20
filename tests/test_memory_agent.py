@@ -88,9 +88,10 @@ def test_log_token_usage_writes_jsonl():
 
 def test_get_token_summary_aggregates():
     import memory_agent as ma
+    from mem.tokens import get_token_summary
     ma.log_token_usage("claude-sonnet-4-6", {"input_tokens": 1000, "output_tokens": 500})
     ma.log_token_usage("claude-haiku-4-5", {"input_tokens": 200, "output_tokens": 100})
-    s = ma.get_token_summary()
+    s = get_token_summary(ma.TOKEN_LOG_PATH)
     assert s["total_requests"] == 2
     assert s["total_input_tokens"] == 1200
     assert len(s["models_used"]) == 2

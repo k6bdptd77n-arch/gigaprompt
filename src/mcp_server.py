@@ -13,7 +13,10 @@ import sys
 from pathlib import Path
 from urllib.parse import quote as _url_quote
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# When run as a script rather than an installed module, ensure src/ is on path
+_src = Path(__file__).parent
+if str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
 
 from mcp.server import FastMCP
 import mem.api as api

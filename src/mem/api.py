@@ -8,6 +8,7 @@ import urllib.error
 from typing import Optional
 
 from mem.config import DEFAULT_PORT
+from mem.print_utils import safe_print
 
 
 def get_api_host() -> str:
@@ -66,12 +67,6 @@ def is_agent_running() -> bool:
 
 def check_running_hint(result: dict) -> bool:
     """Print agent-not-running hint if needed. Returns True if error."""
-    def safe_print(msg):
-        try:
-            print(msg)
-        except UnicodeEncodeError:
-            print(msg.encode('ascii', 'replace').decode())
-
     if "error" in result:
         err = result["error"]
         if err == "not_running":

@@ -14,7 +14,6 @@ import re
 import sqlite3
 import sys
 import hashlib
-from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -22,25 +21,26 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 import threading
 
+# ---------------------------------------------------------------------------
+# Resolve src/ so this script can be run both installed and from source tree
+# ---------------------------------------------------------------------------
+_SRC = Path(__file__).parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-@contextmanager
-def _locked_append(path):
-    """Append-open a file with an exclusive advisory lock (no-op on Windows)."""
-    f = open(path, "a", encoding="utf-8")
-    try:
-        try:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        except (ImportError, OSError):
-            pass
-        yield f
-    finally:
-        try:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except (ImportError, OSError):
-            pass
-        f.close()
+from mem.config import (
+    DB_FILE as DB_PATH,
+    TOKEN_LOG as TOKEN_LOG_PATH,
+    CONFIG_FILE as CONFIG_PATH,
+    SUPER_MEMORY_DIR,
+    DEFAULT_PORT,
+)
+from mem.tokens import (
+    TOKEN_PRICES,
+    DEFAULT_PRICE,
+    log_token_usage as _log_token_usage,
+    get_token_summary as _get_token_summary,
+)
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -48,18 +48,13 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-# Database
-DB_PATH = Path.home() / ".super_memory" / "memory.db"
-TOKEN_LOG_PATH = Path.home() / ".super_memory" / "token_log.jsonl"
-CONFIG_PATH = Path.home() / ".super_memory" / "config.json"
-
 MAX_BODY = 1_048_576  # 1 MiB POST body cap
 
 _active_agent: list = [None]  # mutable cache; invalidated by save_config
 
 
 def load_config() -> dict:
-    """Load config from JSON file."""
+    """Load config from CONFIG_PATH (module-level, patchable in tests)."""
     if CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -70,20 +65,11 @@ def load_config() -> dict:
 
 
 def save_config(config: dict):
-    """Save config to JSON file."""
-    _active_agent[0] = None  # invalidate cache
+    """Save config to CONFIG_PATH and invalidate the active-agent cache."""
+    _active_agent[0] = None
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
-
-
-# Token pricing (Anthropic API — USD per 1M tokens)
-TOKEN_PRICES = {
-    "claude-opus-4-6": {"input": 5.00, "output": 25.00},
-    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
-    "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
-}
-DEFAULT_PRICE = {"input": 5.00, "output": 25.00}
 
 
 def init_db():
@@ -259,81 +245,8 @@ def prepare_search_text(text: str) -> str:
     return text.lower().strip()
 
 
-def log_token_usage(model: str, usage: dict, source: str = "api"):
-    """Log token usage to token_log.jsonl for tracking spend."""
-    prices = TOKEN_PRICES.get(model, DEFAULT_PRICE)
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
-
-    input_cost = (input_tokens / 1_000_000) * prices["input"]
-    output_cost = (output_tokens / 1_000_000) * prices["output"]
-    cache_savings = (cache_read / 1_000_000) * prices["input"] * 0.9
-
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "model": model,
-        "source": source,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cache_read_input_tokens": cache_read,
-        "cache_creation_input_tokens": cache_creation,
-        "estimated_cost_usd": round(input_cost + output_cost, 4),
-        "cache_savings_usd": round(cache_savings, 4),
-    }
-
-    try:
-        TOKEN_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _locked_append(str(TOKEN_LOG_PATH)) as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-
-    return entry
-
-
-def get_token_summary() -> dict:
-    """Aggregate token usage from token_log.jsonl."""
-    total_input = 0
-    total_output = 0
-    total_cost = 0.0
-    total_cache_savings = 0.0
-    entries = 0
-    models = set()
-    daily_costs = {}
-
-    if TOKEN_LOG_PATH.exists():
-        try:
-            with open(TOKEN_LOG_PATH, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = json.loads(line)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                    total_input += e.get("input_tokens", 0)
-                    total_output += e.get("output_tokens", 0)
-                    total_cost += e.get("estimated_cost_usd", 0)
-                    total_cache_savings += e.get("cache_savings_usd", 0)
-                    models.add(e.get("model", "unknown"))
-                    entries += 1
-                    day = e.get("timestamp", "")[:10]
-                    daily_costs[day] = daily_costs.get(day, 0) + e.get("estimated_cost_usd", 0)
-        except OSError:
-            pass
-
-    return {
-        "total_requests": entries,
-        "total_input_tokens": total_input,
-        "total_output_tokens": total_output,
-        "total_cost_usd": round(total_cost, 4),
-        "total_cache_savings_usd": round(total_cache_savings, 0),
-        "models_used": list(models),
-        "daily_costs": {k: round(v, 4) for k, v in sorted(daily_costs.items())},
-    }
+def log_token_usage(model: str, usage: dict, source: str = "api") -> dict:
+    return _log_token_usage(TOKEN_LOG_PATH, model, usage, source)
 
 
 class MemoryHandler(BaseHTTPRequestHandler):
@@ -459,11 +372,11 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 self.send_json({'context': context, 'agent': active})
 
             elif path == '/tokens' or path == '/tokens/summary':
-                summary = get_token_summary()
+                summary = _get_token_summary(TOKEN_LOG_PATH)
                 self.send_json(summary)
 
             elif path == '/tokens/daily':
-                summary = get_token_summary()
+                summary = _get_token_summary(TOKEN_LOG_PATH)
                 self.send_json({"daily": summary.get("daily_costs", {}), "total_usd": summary.get("total_cost_usd", 0)})
 
             elif path == '/tokens/recent':

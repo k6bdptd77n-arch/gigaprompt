@@ -647,7 +647,7 @@ def cmd_install(args):
     source = Path(__file__).parent
     
     if source.resolve() != super_mem_dir.resolve():
-        files_to_copy = ["memory_agent.py", "hook.sh", "context_inject.py"]
+        files_to_copy = ["memory_agent.py", "hook.sh"]
         for f in files_to_copy:
             src = source / f
             if src.exists():

@@ -27,43 +27,22 @@ import subprocess
 import sys
 import urllib.request
 import urllib.error
-from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 
+_SRC = Path(__file__).parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-@contextmanager
-def _locked_append(path: str):
-    """Append-open a file with an exclusive advisory lock (no-op on Windows)."""
-    f = open(path, "a", encoding="utf-8")
-    try:
-        try:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        except (ImportError, OSError):
-            pass
-        yield f
-    finally:
-        try:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except (ImportError, OSError):
-            pass
-        f.close()
+from mem.tokens import TOKEN_PRICES, DEFAULT_PRICE, _locked_append
 
 SUPER_MEMORY_API = os.environ.get("SUPER_MEMORY_API", "http://127.0.0.1:8080")
 TOKEN_LOG_PATH = os.path.expanduser("~/.super_memory/token_log.jsonl")
 
-# Token pricing (Anthropic API — USD per 1M tokens)
-TOKEN_PRICES = {
-    "claude-opus-4-6": {"input": 5.00, "output": 25.00},
-    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
-    "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
-}
-
 
 def log_tokens(model: str, usage: dict, source: str = "curl"):
     """Log token usage to local file + Super Memory API."""
-    prices = TOKEN_PRICES.get(model, {"input": 5.00, "output": 25.00})
+    prices = TOKEN_PRICES.get(model, DEFAULT_PRICE)
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
     cache_read = usage.get("cache_read_input_tokens", 0)
@@ -109,19 +88,6 @@ def log_tokens(model: str, usage: dict, source: str = "curl"):
         print(f"[Super Memory] Warning: Could not reach API at {SUPER_MEMORY_API}", file=sys.stderr)
 
     return entry
-
-
-def extract_usage_from_response(response_text: str) -> dict:
-    """Try to parse usage from raw API response."""
-    try:
-        data = json.loads(response_text)
-    except (json.JSONDecodeError, ValueError):
-        return {}
-    if "usage" in data:
-        return data["usage"]
-    if "model" in data and "messages" in str(data):
-        return data.get("usage", {})
-    return {}
 
 
 def main():

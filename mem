@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Super Memory CLI entry point
+Super Memory CLI entry point.
+When installed via `pip install -e .` the `mem` console_script takes over.
+This file is the fallback for running directly from the source tree.
 """
 import sys
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+_src = Path(__file__).parent / "src"
+if _src.exists() and str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
 
 from mem.main import app
 app()

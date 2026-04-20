@@ -20,10 +20,15 @@ import uuid
 from functools import wraps
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_ROOT = Path(__file__).resolve().parent.parent
+_SRC = _ROOT / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 from flask import Flask, render_template, jsonify, request, send_from_directory, redirect, url_for
 import requests
+from mem.config import SUPER_MEMORY_DIR, DB_FILE as MEMORY_DB_PATH, TOKEN_LOG as _TOKEN_LOG_DEFAULT, UI_TOKEN_FILE as API_TOKEN_PATH
+from mem.tokens import get_token_summary as _get_token_summary
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / 'static'
@@ -32,10 +37,8 @@ app = Flask(__name__, template_folder=str(BASE_DIR / 'templates'), static_folder
 app.secret_key = secrets.token_bytes(32)
 
 SUPER_MEMORY_API = os.environ.get('SUPER_MEMORY_API', 'http://127.0.0.1:8080')
-SUPER_MEMORY_HOME = Path(os.environ.get('SUPER_MEMORY_HOME', Path.home() / '.super_memory'))
+SUPER_MEMORY_HOME = Path(os.environ.get('SUPER_MEMORY_HOME', SUPER_MEMORY_DIR))
 TOKEN_LOG_PATH = SUPER_MEMORY_HOME / 'token_log.jsonl'
-MEMORY_DB_PATH = SUPER_MEMORY_HOME / 'memory.db'
-API_TOKEN_PATH = SUPER_MEMORY_HOME / 'ui_token'
 
 IS_WINDOWS = platform.system() == 'Windows'
 
@@ -101,42 +104,7 @@ def get_memory_summary() -> dict:
 
 
 def get_token_summary() -> dict:
-    total_input = total_output = entries = 0
-    total_cost = total_cache_savings = 0.0
-    models: set = set()
-    daily_costs: dict = {}
-
-    if TOKEN_LOG_PATH.exists():
-        try:
-            with open(TOKEN_LOG_PATH, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = json.loads(line)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                    total_input += e.get('input_tokens', 0)
-                    total_output += e.get('output_tokens', 0)
-                    total_cost += e.get('estimated_cost_usd', 0)
-                    total_cache_savings += e.get('cache_savings_usd', 0)
-                    models.add(e.get('model', 'unknown'))
-                    entries += 1
-                    day = e.get('timestamp', '')[:10]
-                    daily_costs[day] = daily_costs.get(day, 0) + e.get('estimated_cost_usd', 0)
-        except OSError:
-            pass
-
-    return {
-        'total_requests': entries,
-        'total_input_tokens': int(total_input),
-        'total_output_tokens': int(total_output),
-        'total_cost_usd': round(total_cost, 4),
-        'total_cache_savings_usd': round(total_cache_savings, 0),
-        'models_used': sorted(models),
-        'daily_costs': {k: round(v, 4) for k, v in sorted(daily_costs.items())},
-    }
+    return _get_token_summary(TOKEN_LOG_PATH)
 
 
 def get_agent_status() -> bool:
@@ -228,12 +196,13 @@ def project_summary():
 @app.route('/api/tokens/recent')
 @require_token
 def tokens_recent():
+    import collections as _col
     entries = []
     if TOKEN_LOG_PATH.exists():
         try:
             with open(TOKEN_LOG_PATH, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            for line in reversed(lines[-50:]):
+                tail = _col.deque(f, maxlen=50)
+            for line in reversed(list(tail)):
                 line = line.strip()
                 if not line:
                     continue

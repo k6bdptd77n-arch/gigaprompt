@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "super-memory"
+version = "0.1.0"
+description = "Universal AI Memory — persistent shared context across Claude Code, Cursor, Codex and more"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.9",
+    "mcp",
+]
+
+[project.optional-dependencies]
+dashboard = [
+    "flask>=3.0.0",
+    "requests>=2.31.0",
+    "websockets>=12.0",
+]
+desktop = [
+    "super-memory[dashboard]",
+    "pywebview>=5.0",
+]
+
+[project.scripts]
+mem = "mem.main:app"
+memory-agent = "memory_agent:run_server"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
