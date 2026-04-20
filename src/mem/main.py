@@ -15,6 +15,15 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 
+
+def safe_print(msg):
+    """Print without Rich formatting (Windows-safe)."""
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode('ascii', 'replace').decode())
+
+
 # Import subcommands
 from mem.commands import (
     memory_group,
@@ -25,20 +34,41 @@ from mem.commands import (
     project_group,
 )
 
-app.add_typer(memory_group)
-app.add_typer(daemon_group)
-app.add_typer(ui_group)
-app.add_typer(agent_group)
-app.add_typer(file_group)
-app.add_typer(project_group)
+# Memory commands are top-level (mem add, mem done, etc.)
+app.add_typer(memory_group, name="")
+# Other groups keep their names
+app.add_typer(daemon_group, name="daemon")
+app.add_typer(ui_group, name="ui")
+app.add_typer(agent_group, name="agent")
+app.add_typer(file_group, name="file")
+app.add_typer(project_group, name="project")
 
-
-def safe_print(msg):
-    """Print without Rich formatting (Windows-safe)."""
-    try:
-        print(msg)
-    except UnicodeEncodeError:
-        print(msg.encode('ascii', 'replace').decode())
+# Add comp_install AFTER groups
+@app.command()
+def comp_install(
+    shell: str = typer.Option(..., help="Shell type: bash, zsh, fish, powershell"),
+):
+    """Install shell auto-completion for mem command"""
+    if shell == "bash":
+        script = """# Add to ~/.bashrc or ~/.bash_profile:
+eval "$(_MEM_COMPLETE=bash_source mem)" """
+        safe_print(script)
+    elif shell == "zsh":
+        script = """# Add to ~/.zshrc:
+eval "$(_MEM_COMPLETE=zsh_source mem)" """
+        safe_print(script)
+    elif shell == "fish":
+        script = """# Run:
+_mem_complete fish | source"""
+        safe_print(script)
+    elif shell == "powershell":
+        script = """# Add to $PROFILE:
+Invoke-Expression "$(_MEM_COMPLETE=powershell_source mem)" """
+        safe_print(script)
+    else:
+        safe_print(f"[X] Unsupported shell: {shell}")
+        safe_print("Supported: bash, zsh, fish, powershell")
+        raise typer.Exit(1)
 
 
 @app.callback(invoke_without_command=True)
@@ -162,6 +192,17 @@ def inject(
             )
 
     safe_print("\n".join(parts))
+
+
+@app.command()
+def mcp():
+    """Start MCP server for AI agents (Claude Code, Cursor, etc.)"""
+    from mcp_server import run_mcp
+    run_mcp()
+
+
+# Manually register comp_install (workaround for Typer decorator issue)
+app.command(name="completion")(comp_install)
 
 
 if __name__ == "__main__":

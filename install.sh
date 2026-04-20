@@ -74,14 +74,22 @@ download_file() {
 # Install Python dependencies
 install_deps() {
     echo -e "${YELLOW}Checking dependencies...${NC}"
-    
+
     # Check required Python modules
     python3 -c "import http.server" 2>/dev/null && echo "  ✅ http.server (stdlib)" || echo "  ⚠️  http.server missing"
     python3 -c "import sqlite3" 2>/dev/null && echo "  ✅ sqlite3 (stdlib)" || echo "  ⚠️  sqlite3 missing"
     python3 -c "import json" 2>/dev/null && echo "  ✅ json (stdlib)" || echo "  ⚠️  json missing"
     python3 -c "import os" 2>/dev/null && echo "  ✅ os (stdlib)" || echo "  ⚠️  os missing"
-    
-    echo "  ✅ All required modules available (stdlib)"
+
+    # Install MCP for AI agent integration
+    if python3 -c "import mcp" 2>/dev/null; then
+        echo "  ✅ mcp (AI agent integration)"
+    else
+        echo -e "${YELLOW}  Installing mcp for AI agents...${NC}"
+        pip3 install mcp --quiet 2>/dev/null && echo "  ✅ mcp installed" || echo "  ⚠️  mcp install failed (optional)"
+    fi
+
+    echo "  ✅ All required modules available"
 }
 
 # Download and install files

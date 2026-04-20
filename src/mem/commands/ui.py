@@ -7,14 +7,9 @@ import sys
 from pathlib import Path
 import typer
 
+from mem.print_utils import safe_print
+
 ui_group = typer.Typer(name="ui", help="Web dashboard")
-
-
-def safe_print(msg):
-    try:
-        print(msg)
-    except UnicodeEncodeError:
-        print(msg.encode('ascii', 'replace').decode())
 
 
 @ui_group.command()

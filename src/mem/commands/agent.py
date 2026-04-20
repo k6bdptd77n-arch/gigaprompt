@@ -3,14 +3,9 @@ Agent commands: list, add, use, remove, info
 """
 import typer
 
+from mem.print_utils import safe_print
+
 agent_group = typer.Typer(name="agent", help="Multi-agent management")
-
-
-def safe_print(msg):
-    try:
-        print(msg)
-    except UnicodeEncodeError:
-        print(msg.encode('ascii', 'replace').decode())
 
 
 @agent_group.command()

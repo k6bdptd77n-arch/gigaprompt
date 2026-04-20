@@ -3,14 +3,9 @@ File memory commands: add, list, info, context, search
 """
 import typer
 
+from mem.print_utils import safe_print
+
 file_group = typer.Typer(name="file", help="File memory (MVP 8)")
-
-
-def safe_print(msg):
-    try:
-        print(msg)
-    except UnicodeEncodeError:
-        print(msg.encode('ascii', 'replace').decode())
 
 
 def input_prompt(prompt_text: str) -> str:

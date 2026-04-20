@@ -5,25 +5,9 @@ import sys
 import typer
 from typing import Optional
 
+from mem.print_utils import safe_print, print_ok, print_err
+
 memory_group = typer.Typer(name="memory", help="Memory operations")
-
-
-def print_ok(msg):
-    print(f"[OK] {msg}")
-
-
-def print_err(msg):
-    print(f"[X] {msg}")
-
-
-def safe_print(msg):
-    """Print without Unicode errors (Windows-safe)."""
-    try:
-        print(msg)
-    except UnicodeEncodeError:
-        # Encode to ASCII with replacements before printing
-        ascii_msg = msg.encode('ascii', 'replace').decode('ascii')
-        print(ascii_msg)
 
 
 def input_prompt(prompt_text: str) -> str:
@@ -203,6 +187,8 @@ def tokens():
 @memory_group.command()
 def delete(mem_id: int = typer.Argument(..., help="Memory ID")):
     """Delete a memory entry"""
+    if not typer.confirm(f"Delete memory #{mem_id}?"):
+        raise typer.Abort()
     from .. import api
     result = api.api_post("/memories/delete", {"id": mem_id})
     if api.check_running_hint(result):
@@ -218,6 +204,8 @@ def edit(mem_id: int = typer.Argument(..., help="Memory ID"), text: str = typer.
     if not text:
         print_err("Text required")
         raise typer.Exit(1)
+    if not typer.confirm(f"Update memory #{mem_id}?"):
+        raise typer.Abort()
     from .. import api
     result = api.api_post("/memories/edit", {"id": mem_id, "text": text})
     if api.check_running_hint(result):

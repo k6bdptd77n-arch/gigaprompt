@@ -10,18 +10,13 @@ import time
 from pathlib import Path
 import typer
 
+from mem.print_utils import safe_print
+
 daemon_group = typer.Typer(name="daemon", help="Daemon management")
 
 AGENT_PATH = Path.home() / ".super_memory" / "memory_agent.py"
 SERVICE_NAME = "super-memory"
 DEFAULT_PORT = 8080
-
-
-def safe_print(msg):
-    try:
-        print(msg)
-    except UnicodeEncodeError:
-        print(msg.encode('ascii', 'replace').decode())
 
 
 def is_port_open(port: int) -> bool:

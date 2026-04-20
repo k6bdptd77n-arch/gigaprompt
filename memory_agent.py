@@ -115,6 +115,33 @@ def init_db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON memories(timestamp)")
 
+    # FTS5 virtual table for fast full-text search
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+            text,
+            content='memories',
+            content_rowid='id'
+        )
+    """)
+
+    # Triggers to keep FTS in sync
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+            INSERT INTO memories_fts(rowid, text) VALUES (new.id, new.text);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, text) VALUES('delete', old.id, old.text);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+            INSERT INTO memories_fts(memories_fts, rowid, text) VALUES('delete', old.id, old.text);
+            INSERT INTO memories_fts(rowid, text) VALUES (new.id, new.text);
+        END
+    """)
+
     # Files table (with agent_id)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS files (
@@ -324,258 +351,254 @@ class MemoryHandler(BaseHTTPRequestHandler):
         """Handle GET requests."""
         parsed = urlparse(self.path)
         path = parsed.path
-        
+
         conn = get_db()
-        
-        if path == '/health':
-            self.send_json({'status': 'ok', 'db': str(DB_PATH)})
-        
-        elif path == '/summary':
-            active = get_active_agent()
-            cursor = conn.execute("""
-                SELECT type, COUNT(*) as count FROM memories
-                WHERE agent_id = ? GROUP BY type
-            """, (active,))
-            counts = {row['type']: row['count'] for row in cursor.fetchall()}
-            cursor = conn.execute(
-                "SELECT COUNT(*) as total FROM memories WHERE agent_id = ?", (active,)
-            )
-            total = cursor.fetchone()['total']
-            self.send_json({
-                'total': total,
-                'completed': counts.get('completed', 0),
-                'decisions': counts.get('decision', 0),
-                'blockers': counts.get('blocker', 0),
-                'learnings': counts.get('learning', 0),
-                'active_agent': active,
-            })
+        try:
+            if path == '/health':
+                self.send_json({'status': 'ok', 'db': str(DB_PATH)})
 
-        elif path == '/recent':
-            active = get_active_agent()
-            qs = parse_qs(parsed.query)
-            limit = min(int(qs.get('limit', ['10'])[0]), 100)
-            offset = int(qs.get('offset', ['0'])[0])
-            cursor = conn.execute(
-                "SELECT * FROM memories WHERE agent_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-                (active, limit, offset)
-            )
-            rows = [dict(row) for row in cursor.fetchall()]
-            self.send_json({'memories': rows, 'agent': active})
-
-        elif path.startswith('/search'):
-            active = get_active_agent()
-            query = parse_qs(parsed.query).get('q', [''])[0]
-            if query:
+            elif path == '/summary':
+                active = get_active_agent()
                 cursor = conn.execute("""
-                    SELECT * FROM memories
+                    SELECT type, COUNT(*) as count FROM memories
+                    WHERE agent_id = ? GROUP BY type
+                """, (active,))
+                counts = {row['type']: row['count'] for row in cursor.fetchall()}
+                cursor = conn.execute(
+                    "SELECT COUNT(*) as total FROM memories WHERE agent_id = ?", (active,)
+                )
+                total = cursor.fetchone()['total']
+                self.send_json({
+                    'total': total,
+                    'completed': counts.get('completed', 0),
+                    'decisions': counts.get('decision', 0),
+                    'blockers': counts.get('blocker', 0),
+                    'learnings': counts.get('learning', 0),
+                    'active_agent': active,
+                })
+
+            elif path == '/recent':
+                active = get_active_agent()
+                qs = parse_qs(parsed.query)
+                limit = min(int(qs.get('limit', ['10'])[0]), 100)
+                offset = int(qs.get('offset', ['0'])[0])
+                cursor = conn.execute(
+                    "SELECT * FROM memories WHERE agent_id = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+                    (active, limit, offset)
+                )
+                rows = [dict(row) for row in cursor.fetchall()]
+                self.send_json({'memories': rows, 'agent': active})
+
+            elif path.startswith('/search'):
+                active = get_active_agent()
+                query = parse_qs(parsed.query).get('q', [''])[0]
+                if query:
+                    # Use FTS5 for fast full-text search
+                    try:
+                        cursor = conn.execute("""
+                            SELECT memories.* FROM memories
+                            JOIN memories_fts ON memories.id = memories_fts.rowid
+                            WHERE memories_fts MATCH ? AND memories.agent_id = ?
+                            ORDER BY memories.id DESC LIMIT 20
+                        """, (f'{query.lower()}*', active))
+                        rows = [dict(row) for row in cursor.fetchall()]
+                    except Exception:
+                        # Fallback to LIKE if FTS fails
+                        cursor = conn.execute("""
+                            SELECT * FROM memories
+                            WHERE agent_id = ?
+                              AND (search_text LIKE ? OR text LIKE ?)
+                            ORDER BY id DESC LIMIT 20
+                        """, (active, f'%{query.lower()}%', f'%{query.lower()}%'))
+                        rows = [dict(row) for row in cursor.fetchall()]
+                    self.send_json({'results': rows, 'query': query, 'agent': active})
+                else:
+                    self.send_json({'results': [], 'query': ''})
+
+            elif path == '/context':
+                active = get_active_agent()
+                cursor = conn.execute("""
+                    SELECT text, type, timestamp FROM memories
                     WHERE agent_id = ?
-                      AND (search_text LIKE ? OR text LIKE ?)
                     ORDER BY id DESC LIMIT 20
-                """, (active, f'%{query.lower()}%', f'%{query.lower()}%'))
+                """, (active,))
+                rows = cursor.fetchall()
+
+                completed = [dict(r) for r in rows if r['type'] == 'completed'][:5]
+                decisions = [dict(r) for r in rows if r['type'] == 'decision'][:3]
+                blockers = [dict(r) for r in rows if r['type'] == 'blocker'][:2]
+
+                context = f"## Recent Memory Context (agent: {active})\n\n"
+
+                if completed:
+                    context += "### Completed Tasks:\n"
+                    for m in completed:
+                        context += f"- {m['text'][:100]}\n"
+                    context += "\n"
+
+                if decisions:
+                    context += "### Decisions:\n"
+                    for m in decisions:
+                        context += f"- {m['text'][:100]}\n"
+                    context += "\n"
+
+                if blockers:
+                    context += "### Blockers:\n"
+                    for m in blockers:
+                        context += f"- {m['text'][:100]}\n"
+
+                self.send_json({'context': context, 'agent': active})
+
+            elif path == '/tokens' or path == '/tokens/summary':
+                summary = get_token_summary()
+                self.send_json(summary)
+
+            elif path == '/tokens/daily':
+                summary = get_token_summary()
+                self.send_json({"daily": summary.get("daily_costs", {}), "total_usd": summary.get("total_cost_usd", 0)})
+
+            elif path == '/tokens/recent':
+                entries = []
+                if TOKEN_LOG_PATH.exists():
+                    try:
+                        with open(TOKEN_LOG_PATH, "r", encoding="utf-8") as f:
+                            lines = f.readlines()
+                        for line in reversed(lines[-20:]):
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                entries.append(json.loads(line))
+                            except (json.JSONDecodeError, ValueError):
+                                continue
+                    except OSError:
+                        pass
+                self.send_json({"entries": entries})
+
+            elif path == '/files' or path == '/files/list':
+                cursor = conn.execute("SELECT * FROM files ORDER BY updated_at DESC LIMIT 50")
                 rows = [dict(row) for row in cursor.fetchall()]
-                self.send_json({'results': rows, 'query': query, 'agent': active})
-            else:
-                self.send_json({'results': [], 'query': ''})
+                self.send_json({'files': rows})
 
-        elif path == '/context':
-            active = get_active_agent()
-            cursor = conn.execute("""
-                SELECT text, type, timestamp FROM memories
-                WHERE agent_id = ?
-                ORDER BY id DESC LIMIT 20
-            """, (active,))
-            rows = cursor.fetchall()
-
-            completed = [dict(r) for r in rows if r['type'] == 'completed'][:5]
-            decisions = [dict(r) for r in rows if r['type'] == 'decision'][:3]
-            blockers = [dict(r) for r in rows if r['type'] == 'blocker'][:2]
-
-            context = f"## Recent Memory Context (agent: {active})\n\n"
-
-            if completed:
-                context += "### Completed Tasks:\n"
-                for m in completed:
-                    context += f"- {m['text'][:100]}\n"
-                context += "\n"
-
-            if decisions:
-                context += "### Decisions:\n"
-                for m in decisions:
-                    context += f"- {m['text'][:100]}\n"
-                context += "\n"
-
-            if blockers:
-                context += "### Blockers:\n"
-                for m in blockers:
-                    context += f"- {m['text'][:100]}\n"
-
-            self.send_json({'context': context, 'agent': active})
-
-        elif path == '/tokens' or path == '/tokens/summary':
-            summary = get_token_summary()
-            self.send_json(summary)
-
-        elif path == '/tokens/daily':
-            summary = get_token_summary()
-            self.send_json({"daily": summary.get("daily_costs", {}), "total_usd": summary.get("total_cost_usd", 0)})
-
-        elif path == '/tokens/recent':
-            entries = []
-            if TOKEN_LOG_PATH.exists():
-                try:
-                    with open(TOKEN_LOG_PATH, "r", encoding="utf-8") as f:
-                        lines = f.readlines()
-                    for line in reversed(lines[-20:]):
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            entries.append(json.loads(line))
-                        except (json.JSONDecodeError, ValueError):
-                            continue
-                except OSError:
-                    pass
-            self.send_json({"entries": entries})
-        
-        # ============================================================
-        # FILE ENDPOINTS (NEW - MVP 8)
-        # ============================================================
-        
-        elif path == '/files' or path == '/files/list':
-            cursor = conn.execute("SELECT * FROM files ORDER BY updated_at DESC LIMIT 50")
-            rows = [dict(row) for row in cursor.fetchall()]
-            self.send_json({'files': rows})
-        
-        elif path.startswith('/files/') and path.endswith('/info'):
-            # GET /files/<filepath>/info
-            filepath = path[7:-5]  # Extract filepath
-            cursor = conn.execute("SELECT * FROM files WHERE filepath = ?", (filepath,))
-            row = cursor.fetchone()
-            if row:
-                self.send_json({'file': dict(row)})
-            else:
-                self.send_json({'error': 'File not found', 'filepath': filepath}, 404)
-        
-        elif path.startswith('/files/search'):
-            query = parse_qs(parsed.query).get('q', [''])[0]
-            if query:
-                cursor = conn.execute("""
-                    SELECT * FROM files 
-                    WHERE search_text LIKE ? OR filepath LIKE ? OR purpose LIKE ?
-                    ORDER BY updated_at DESC LIMIT 20
-                """, (f'%{query.lower()}%', f'%{query.lower()}%', f'%{query.lower()}%'))
-                rows = [dict(row) for row in cursor.fetchall()]
-                self.send_json({'results': rows, 'query': query})
-            else:
-                self.send_json({'results': []})
-        
-        elif path == '/folders' or path == '/folders/list':
-            cursor = conn.execute("SELECT * FROM folders ORDER BY updated_at DESC LIMIT 50")
-            rows = [dict(row) for row in cursor.fetchall()]
-            self.send_json({'folders': rows})
-        
-        elif path.startswith('/folders/') and path.endswith('/info'):
-            folder_path = path[9:-5]
-            cursor = conn.execute("SELECT * FROM folders WHERE path = ?", (folder_path,))
-            row = cursor.fetchone()
-            if row:
-                self.send_json({'folder': dict(row)})
-            else:
-                self.send_json({'error': 'Folder not found', 'path': folder_path}, 404)
-        
-        elif path == '/projects' or path == '/projects/list':
-            reg_conn = get_registry_db()
-            cursor = reg_conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
-            rows = [dict(row) for row in cursor.fetchall()]
-            reg_conn.close()
-            self.send_json({'projects': rows})
-        
-        elif path.startswith('/projects/') and path.endswith('/files'):
-            project_name = path[10:-6]
-            reg_conn = get_registry_db()
-            cursor = reg_conn.execute("SELECT * FROM projects WHERE name = ?", (project_name,))
-            project = cursor.fetchone()
-            reg_conn.close()
-            if project:
-                root = project['root_path'] or ''
-                # Find all files under this project
-                cursor = conn.execute("""
-                    SELECT * FROM files WHERE filepath LIKE ? ORDER BY filepath
-                """, (f'{root}%',))
-                rows = [dict(row) for row in cursor.fetchall()]
-                self.send_json({'project': project_name, 'files': rows})
-            else:
-                self.send_json({'error': 'Project not found'}, 404)
-        
-        elif path == '/file_context':
-            # NEW: Get full context for a file (from file + folder + related decisions)
-            query = parse_qs(parsed.query).get('path', [''])[0]
-            if not query:
-                self.send_json({'error': 'path parameter required'}, 400)
-            
-            # Get file info
-            cursor = conn.execute("SELECT * FROM files WHERE filepath = ?", (query,))
-            file_row = cursor.fetchone()
-            
-            # Get folder info
-            folder_path = str(Path(query).parent)
-            cursor = conn.execute("SELECT * FROM folders WHERE path = ?", (folder_path,))
-            folder_row = cursor.fetchone()
-            
-            # Get related decisions from memories
-            file_name = Path(query).name
-            cursor = conn.execute("""
-                SELECT * FROM memories 
-                WHERE text LIKE ? OR text LIKE ?
-                ORDER BY id DESC LIMIT 5
-            """, (f'%{file_name}%', f'%{query}%'))
-            related_memories = [dict(row) for row in cursor.fetchall()]
-            
-            context = {
-                'file': dict(file_row) if file_row else None,
-                'folder': dict(folder_row) if folder_row else None,
-                'related_memories': related_memories,
-                'query_path': query
-            }
-            
-            self.send_json(context)
-
-        # ============================================================
-        # AGENT ENDPOINTS (multi-agent)
-        # ============================================================
-
-        elif path == '/agents':
-            cursor = conn.execute("SELECT * FROM agents ORDER BY name")
-            rows = [dict(row) for row in cursor.fetchall()]
-            # Remove api_key from listing for security
-            for row in rows:
-                row.pop('api_key', None)
-            active_agent = get_active_agent()
-            self.send_json({'agents': rows, 'active': active_agent})
-
-        elif path.startswith('/agents/') and path != '/agents/':
-            # GET /agents/<name>
-            parts = path.split('/')
-            if len(parts) >= 3:
-                agent_name = parts[2]
-                cursor = conn.execute("SELECT * FROM agents WHERE name = ?", (agent_name,))
+            elif path.startswith('/files/') and path.endswith('/info'):
+                filepath = path[7:-5]
+                cursor = conn.execute("SELECT * FROM files WHERE filepath = ?", (filepath,))
                 row = cursor.fetchone()
                 if row:
-                    d = dict(row)
-                    d.pop('api_key', None)  # Don't expose API key
-                    self.send_json({'agent': d})
+                    self.send_json({'file': dict(row)})
                 else:
-                    self.send_json({'error': 'Agent not found'}, 404)
+                    self.send_json({'error': 'File not found', 'filepath': filepath}, 404)
+
+            elif path.startswith('/files/search'):
+                query = parse_qs(parsed.query).get('q', [''])[0]
+                if query:
+                    cursor = conn.execute("""
+                        SELECT * FROM files
+                        WHERE search_text LIKE ? OR filepath LIKE ? OR purpose LIKE ?
+                        ORDER BY updated_at DESC LIMIT 20
+                    """, (f'%{query.lower()}%', f'%{query.lower()}%', f'%{query.lower()}%'))
+                    rows = [dict(row) for row in cursor.fetchall()]
+                    self.send_json({'results': rows, 'query': query})
+                else:
+                    self.send_json({'results': []})
+
+            elif path == '/folders' or path == '/folders/list':
+                cursor = conn.execute("SELECT * FROM folders ORDER BY updated_at DESC LIMIT 50")
+                rows = [dict(row) for row in cursor.fetchall()]
+                self.send_json({'folders': rows})
+
+            elif path.startswith('/folders/') and path.endswith('/info'):
+                folder_path = path[9:-5]
+                cursor = conn.execute("SELECT * FROM folders WHERE path = ?", (folder_path,))
+                row = cursor.fetchone()
+                if row:
+                    self.send_json({'folder': dict(row)})
+                else:
+                    self.send_json({'error': 'Folder not found', 'path': folder_path}, 404)
+
+            elif path == '/projects' or path == '/projects/list':
+                reg_conn = get_registry_db()
+                cursor = reg_conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
+                rows = [dict(row) for row in cursor.fetchall()]
+                reg_conn.close()
+                self.send_json({'projects': rows})
+
+            elif path.startswith('/projects/') and path.endswith('/files'):
+                project_name = path[10:-6]
+                reg_conn = get_registry_db()
+                cursor = reg_conn.execute("SELECT * FROM projects WHERE name = ?", (project_name,))
+                project = cursor.fetchone()
+                reg_conn.close()
+                if project:
+                    root = project['root_path'] or ''
+                    cursor = conn.execute("""
+                        SELECT * FROM files WHERE filepath LIKE ? ORDER BY filepath
+                    """, (f'{root}%',))
+                    rows = [dict(row) for row in cursor.fetchall()]
+                    self.send_json({'project': project_name, 'files': rows})
+                else:
+                    self.send_json({'error': 'Project not found'}, 404)
+
+            elif path == '/file_context':
+                query = parse_qs(parsed.query).get('path', [''])[0]
+                if not query:
+                    self.send_json({'error': 'path parameter required'}, 400)
+                    return
+
+                cursor = conn.execute("SELECT * FROM files WHERE filepath = ?", (query,))
+                file_row = cursor.fetchone()
+
+                folder_path = str(Path(query).parent)
+                cursor = conn.execute("SELECT * FROM folders WHERE path = ?", (folder_path,))
+                folder_row = cursor.fetchone()
+
+                file_name = Path(query).name
+                cursor = conn.execute("""
+                    SELECT * FROM memories
+                    WHERE text LIKE ? OR text LIKE ?
+                    ORDER BY id DESC LIMIT 5
+                """, (f'%{file_name}%', f'%{query}%'))
+                related_memories = [dict(row) for row in cursor.fetchall()]
+
+                context = {
+                    'file': dict(file_row) if file_row else None,
+                    'folder': dict(folder_row) if folder_row else None,
+                    'related_memories': related_memories,
+                    'query_path': query
+                }
+
+                self.send_json(context)
+
+            elif path == '/agents':
+                cursor = conn.execute("SELECT * FROM agents ORDER BY name")
+                rows = [dict(row) for row in cursor.fetchall()]
+                for row in rows:
+                    row.pop('api_key', None)
+                active_agent = get_active_agent()
+                self.send_json({'agents': rows, 'active': active_agent})
+
+            elif path.startswith('/agents/') and path != '/agents/':
+                parts = path.split('/')
+                if len(parts) >= 3:
+                    agent_name = parts[2]
+                    cursor = conn.execute("SELECT * FROM agents WHERE name = ?", (agent_name,))
+                    row = cursor.fetchone()
+                    if row:
+                        d = dict(row)
+                        d.pop('api_key', None)
+                        self.send_json({'agent': d})
+                    else:
+                        self.send_json({'error': 'Agent not found'}, 404)
+                else:
+                    self.send_json({'error': 'Invalid path'}, 400)
+
+            elif path == '/active_agent':
+                self.send_json({'active': get_active_agent()})
+
             else:
-                self.send_json({'error': 'Invalid path'}, 400)
-
-        elif path == '/active_agent':
-            self.send_json({'active': get_active_agent()})
-
-        else:
-            self.send_json({'error': 'Not found'}, 404)
-        
-        conn.close()
+                self.send_json({'error': 'Not found'}, 404)
+        finally:
+            conn.close()
     
     def do_POST(self):
         """Handle POST requests."""

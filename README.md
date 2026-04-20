@@ -47,6 +47,7 @@ POST /log_tokens          — Log token usage
 
 ### CLI Commands
 ```bash
+# Memory operations (top-level, intuitive)
 mem add "text"           # Add entry
 mem done "task"          # Mark completed
 mem decision "topic"     # Add decision
@@ -56,10 +57,15 @@ mem recent               # Recent entries
 mem summary              # Stats
 mem context              # AI context
 mem tokens               # Token usage summary
-mem status               # Check agent
-mem start                # Start agent
-mem stop                 # Stop agent
-mem install              # Install + auto-start
+
+# Daemon management
+mem daemon start         # Start daemon
+mem daemon stop          # Stop daemon
+mem daemon status        # Check status
+mem init                 # Initialize (first time)
+
+# Shell completion
+mem completion bash      # Install bash completion
 ```
 
 ### Auto-Start

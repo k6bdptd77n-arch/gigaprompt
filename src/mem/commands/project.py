@@ -3,14 +3,9 @@ Project commands: add, list
 """
 import typer
 
+from mem.print_utils import safe_print
+
 project_group = typer.Typer(name="project", help="Project management")
-
-
-def safe_print(msg):
-    try:
-        print(msg)
-    except UnicodeEncodeError:
-        print(msg.encode('ascii', 'replace').decode())
 
 
 @project_group.command()
