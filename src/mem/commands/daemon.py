@@ -70,13 +70,14 @@ def start_background(port: int = DEFAULT_PORT, verbose: bool = False):
     pid_file = Path.home() / ".super_memory" / "agent.pid"
 
     try:
-        proc = subprocess.Popen(
-            [sys.executable, str(AGENT_PATH), "--port", str(port)],
-            env=env,
-            stdout=open(log_path, "a"),
-            stderr=subprocess.STDOUT,
-            start_new_session=True
-        )
+        with open(log_path, "a") as log_f:
+            proc = subprocess.Popen(
+                [sys.executable, str(AGENT_PATH), "--port", str(port)],
+                env=env,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                start_new_session=True
+            )
         pid_file.write_text(str(proc.pid))
 
         # Wait for startup
@@ -138,17 +139,25 @@ def stop():
                             safe_print("[OK] Stopped")
                             return
                 else:
-                    result = subprocess.run(
+                    # Try ss first (widely available), fall back to lsof
+                    pid = None
+                    for cmd in (
+                        ["ss", "-tlnp", f"sport = :{port}"],
                         ["lsof", "-ti", f":{port}"],
-                        capture_output=True, text=True
-                    )
-                    if result.returncode == 0:
-                        for pid in result.stdout.strip().split('\n'):
-                            if pid:
-                                os.kill(int(pid), signal.SIGTERM)
+                    ):
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        if result.returncode == 0 and result.stdout.strip():
+                            for token in result.stdout.split():
+                                if token.isdigit():
+                                    pid = int(token)
+                                    break
+                        if pid:
+                            break
+                    if pid:
+                        os.kill(pid, signal.SIGTERM)
                         safe_print("[OK] Stopped")
                         return
-            except:
+            except Exception:
                 pass
 
     safe_print("[-] Not running")

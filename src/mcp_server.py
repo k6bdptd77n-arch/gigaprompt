@@ -11,8 +11,8 @@ Usage:
 """
 import sys
 from pathlib import Path
+from urllib.parse import quote as _url_quote
 
-# Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from mcp.server import FastMCP
@@ -63,84 +63,87 @@ def tool_response(tool_name: str, result: dict) -> str:
     return str(result)
 
 
+_DAEMON_NOT_RUNNING = "Error: Super Memory daemon is not running. Start with: mem daemon start"
+
+
 @mcp.tool()
 def memory_search(query: str) -> str:
     """Search memory entries by query."""
-    if not api.is_agent_running():
-        return "Error: Super Memory daemon is not running. Start with: mem daemon start"
-    result = api.api_get(f"/search?q={query}")
+    result = api.api_get(f"/search?q={_url_quote(query)}")
+    if result.get("error") == "not_running":
+        return _DAEMON_NOT_RUNNING
     return tool_response("memory_search", result)
 
 
 @mcp.tool()
 def memory_add(text: str) -> str:
     """Add a general entry to memory."""
-    if not api.is_agent_running():
-        return "Error: Super Memory daemon is not running. Start with: mem daemon start"
     result = api.api_post("/add", {"text": text, "type": "general", "source": "mcp"})
+    if result.get("error") == "not_running":
+        return _DAEMON_NOT_RUNNING
     return tool_response("memory_add", result)
 
 
 @mcp.tool()
 def memory_done(task: str) -> str:
     """Mark a task as completed."""
-    if not api.is_agent_running():
-        return "Error: Super Memory daemon is not running. Start with: mem daemon start"
     result = api.api_post("/add_completed", {"task": task, "source": "mcp"})
+    if result.get("error") == "not_running":
+        return _DAEMON_NOT_RUNNING
     return tool_response("memory_done", result)
 
 
 @mcp.tool()
 def memory_decision(topic: str, reason: str = "") -> str:
     """Record a decision made."""
-    if not api.is_agent_running():
-        return "Error: Super Memory daemon is not running. Start with: mem daemon start"
     result = api.api_post("/add_decision", {
         "topic": topic,
         "reason": reason,
         "source": "mcp"
     })
+    if result.get("error") == "not_running":
+        return _DAEMON_NOT_RUNNING
     return tool_response("memory_decision", result)
 
 
 @mcp.tool()
 def memory_blocked(task: str, blocker: str = "unknown", needed: str = "TBD") -> str:
     """Add a blocker."""
-    if not api.is_agent_running():
-        return "Error: Super Memory daemon is not running. Start with: mem daemon start"
     result = api.api_post("/add_blocker", {
         "task": task,
         "blocker": blocker,
         "needed": needed,
         "source": "mcp"
     })
+    if result.get("error") == "not_running":
+        return _DAEMON_NOT_RUNNING
     return tool_response("memory_blocked", result)
 
 
 @mcp.tool()
 def memory_context() -> str:
     """Get AI context (recent completed, decisions, blockers)."""
-    if not api.is_agent_running():
-        return "Error: Super Memory daemon is not running. Start with: mem daemon start"
     result = api.api_get("/context")
+    if result.get("error") == "not_running":
+        return _DAEMON_NOT_RUNNING
     return tool_response("memory_context", result)
 
 
 @mcp.tool()
 def memory_summary() -> str:
     """Get memory statistics."""
-    if not api.is_agent_running():
-        return "Error: Super Memory daemon is not running. Start with: mem daemon start"
     result = api.api_get("/summary")
+    if result.get("error") == "not_running":
+        return _DAEMON_NOT_RUNNING
     return tool_response("memory_summary", result)
 
 
 @mcp.tool()
 def memory_recent(limit: int = 10) -> str:
     """Get recent memory entries."""
-    if not api.is_agent_running():
-        return "Error: Super Memory daemon is not running. Start with: mem daemon start"
     result = api.api_get(f"/recent?limit={limit}")
+    if result.get("error") == "not_running":
+        return _DAEMON_NOT_RUNNING
     return tool_response("memory_recent", result)
 
 

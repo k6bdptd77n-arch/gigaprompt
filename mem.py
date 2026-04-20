@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# DEPRECATED: use `src/mem/main.py` (Typer-based CLI) as the canonical entry point.
+# This file is retained only for backward compatibility and will be removed in a future release.
 """
 Super Memory CLI
 ================

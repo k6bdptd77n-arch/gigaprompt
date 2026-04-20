@@ -22,13 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from flask import Flask, render_template, jsonify, request, send_from_directory
+from flask import Flask, render_template, jsonify, request, send_from_directory, redirect, url_for
 import requests
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / 'static'
 
 app = Flask(__name__, template_folder=str(BASE_DIR / 'templates'), static_folder=None)
+app.secret_key = secrets.token_bytes(32)
 
 SUPER_MEMORY_API = os.environ.get('SUPER_MEMORY_API', 'http://127.0.0.1:8080')
 SUPER_MEMORY_HOME = Path(os.environ.get('SUPER_MEMORY_HOME', Path.home() / '.super_memory'))
@@ -71,9 +72,13 @@ def _token_from_request() -> str:
 def require_token(view):
     @wraps(view)
     def wrapper(*args, **kwargs):
-        if not secrets.compare_digest(_token_from_request(), UI_TOKEN):
-            return jsonify({'error': 'unauthorized'}), 401
-        return view(*args, **kwargs)
+        token = _token_from_request()
+        if token and secrets.compare_digest(token, UI_TOKEN):
+            return view(*args, **kwargs)
+        cookie = request.cookies.get('ui_auth', '')
+        if cookie and secrets.compare_digest(cookie, UI_TOKEN):
+            return view(*args, **kwargs)
+        return jsonify({'error': 'unauthorized'}), 401
     return wrapper
 
 
@@ -144,7 +149,17 @@ def get_agent_status() -> bool:
 
 @app.route('/')
 def index():
-    return render_template('index.html', ui_token=UI_TOKEN)
+    token = request.args.get('token', '')
+    if token:
+        if secrets.compare_digest(token, UI_TOKEN):
+            resp = redirect(url_for('index'))
+            resp.set_cookie('ui_auth', UI_TOKEN, httponly=True, samesite='Strict', max_age=86400)
+            return resp
+        return jsonify({'error': 'unauthorized'}), 401
+    cookie = request.cookies.get('ui_auth', '')
+    if not (cookie and secrets.compare_digest(cookie, UI_TOKEN)):
+        return jsonify({'error': 'unauthorized — open via the URL printed at startup'}), 401
+    return render_template('index.html', ui_token='')
 
 
 @app.route('/setup')
@@ -314,8 +329,6 @@ def sql_query():
     query = (data.get('query') or '').strip().rstrip(';')
     if not query:
         return jsonify({'error': 'Query is required'}), 400
-    if ';' in query:
-        return jsonify({'error': 'Multiple statements are not allowed'}), 400
 
     try:
         conn = sqlite3.connect(f'file:{MEMORY_DB_PATH}?mode=ro', uri=True)
@@ -358,6 +371,9 @@ def _resolve_mem_script() -> Path:
     return candidates[0]
 
 
+_ALLOWED_CLI_SUBCMDS = {'add', 'done', 'decision', 'blocked', 'search', 'recent', 'summary'}
+
+
 @app.route('/api/cli/run', methods=['POST'])
 @require_token
 def cli_run():
@@ -373,6 +389,10 @@ def cli_run():
         args = shlex.split(cmd)
     except ValueError as e:
         return jsonify({'error': f'Bad command: {e}'}), 400
+
+    if not args or args[0] not in _ALLOWED_CLI_SUBCMDS:
+        allowed = ', '.join(sorted(_ALLOWED_CLI_SUBCMDS))
+        return jsonify({'error': f'Subcommand not allowed. Allowed: {allowed}'}), 400
 
     env = os.environ.copy()
     env['PYTHONIOENCODING'] = 'utf-8'
@@ -623,8 +643,21 @@ class PtySession:
                 else:
                     self.proc.kill()
             else:
-                os.kill(self.pid, 9)
-                os.close(self.fd)
+                import signal as _signal
+                try:
+                    os.kill(self.pid, _signal.SIGTERM)
+                    import select as _select
+                    _select.select([], [], [], 2.0)
+                except (OSError, ProcessLookupError):
+                    pass
+                try:
+                    os.kill(self.pid, 9)
+                except (OSError, ProcessLookupError):
+                    pass
+                try:
+                    os.close(self.fd)
+                except OSError:
+                    pass
         except (OSError, ProcessLookupError):
             pass
 
@@ -646,12 +679,20 @@ async def pty_handler(websocket):
     path = getattr(req, 'path', '') if req is not None else getattr(websocket, 'path', '') or ''
     qs = _up.urlparse(path).query
     token = _up.parse_qs(qs).get('token', [''])[0]
-    if not secrets.compare_digest(token, UI_TOKEN):
+    # Accept permanent UI_TOKEN or a short-lived single-use ws-token
+    now = time.time()
+    _ws_tokens_clean = {t: exp for t, exp in list(_ws_tokens.items()) if exp > now}
+    _ws_tokens.clear()
+    _ws_tokens.update(_ws_tokens_clean)
+    is_ui_token = token and secrets.compare_digest(token, UI_TOKEN)
+    is_ws_token = not is_ui_token and token in _ws_tokens
+    if not (is_ui_token or is_ws_token):
         try:
             await websocket.send(json.dumps({'type': 'error', 'code': 'unauthorized'}))
         finally:
             await websocket.close(code=4401)
         return
+    _ws_tokens.pop(token, None)  # single-use
 
     loop = asyncio.get_running_loop()
     sessions: dict = {}
@@ -718,8 +759,8 @@ async def pty_handler(websocket):
 
             else:
                 await send(json.dumps({'type': 'error', 'code': 'unknown_type', 'received': mtype}))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"pty_handler error: {e}", file=sys.stderr)
     finally:
         with lock:
             items = list(sessions.values())
@@ -731,8 +772,18 @@ async def pty_handler(websocket):
 @app.route('/api/terminals')
 @require_token
 def terminals_list():
-    # Session state lives per-websocket; expose a stub so UI can detect the feature.
     return jsonify({'multiplexed': True, 'protocol': 'json'})
+
+
+_ws_tokens: dict = {}  # short-lived single-use tokens for WS auth
+
+
+@app.route('/api/ws-token')
+@require_token
+def ws_token_route():
+    tok = secrets.token_urlsafe(16)
+    _ws_tokens[tok] = time.time() + 30  # valid for 30 s
+    return jsonify({'token': tok})
 
 
 # ============================================================
@@ -746,9 +797,7 @@ def start_websocket_server():
         async with websockets.serve(pty_handler, '127.0.0.1', 5001):
             await asyncio.Future()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run())
+    asyncio.run(run())
 
 
 def start_flask():
@@ -771,7 +820,7 @@ def main():
     time.sleep(1.5)
 
     url = f'http://127.0.0.1:5000/?token={UI_TOKEN}'
-    print(f'Opening browser at {url}')
+    print(f'Opening browser (token used once for cookie auth, then URL cleans up)')
     webbrowser.open(url)
 
     print('Flask running. Press Ctrl+C to stop.')
