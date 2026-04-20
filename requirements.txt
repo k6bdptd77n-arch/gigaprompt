@@ -1,0 +1,15 @@
+# Core runtime (CLI + MCP server)
+typer>=0.9
+mcp
+
+# Dashboard / desktop monitor
+flask>=3.0.0
+requests>=2.31.0
+websockets>=12.0
+
+# Desktop GUI (optional — Windows PTY support via pywinpty)
+# pywebview>=5.0
+# pywinpty; sys_platform == "win32"
+
+# Dev / test
+pytest>=8.0

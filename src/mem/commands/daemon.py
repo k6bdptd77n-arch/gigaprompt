@@ -11,12 +11,12 @@ from pathlib import Path
 import typer
 
 from mem.print_utils import safe_print
+from mem.config import DEFAULT_PORT, SUPER_MEMORY_DIR, AGENT_PID, AGENT_LOG
 
 daemon_group = typer.Typer(name="daemon", help="Daemon management")
 
-AGENT_PATH = Path.home() / ".super_memory" / "memory_agent.py"
+AGENT_PATH = SUPER_MEMORY_DIR / "memory_agent.py"
 SERVICE_NAME = "super-memory"
-DEFAULT_PORT = 8080
 
 
 def is_port_open(port: int) -> bool:
@@ -66,17 +66,18 @@ def start_background(port: int = DEFAULT_PORT, verbose: bool = False):
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
 
-    log_path = Path.home() / ".super_memory" / "agent.log"
-    pid_file = Path.home() / ".super_memory" / "agent.pid"
+    log_path = AGENT_LOG
+    pid_file = AGENT_PID
 
     try:
-        proc = subprocess.Popen(
-            [sys.executable, str(AGENT_PATH), "--port", str(port)],
-            env=env,
-            stdout=open(log_path, "a"),
-            stderr=subprocess.STDOUT,
-            start_new_session=True
-        )
+        with open(log_path, "a") as log_f:
+            proc = subprocess.Popen(
+                [sys.executable, str(AGENT_PATH), "--port", str(port)],
+                env=env,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                start_new_session=True
+            )
         pid_file.write_text(str(proc.pid))
 
         # Wait for startup
@@ -108,10 +109,8 @@ def start(port: int = typer.Option(DEFAULT_PORT, "--port", "-p", help="Port to r
 @daemon_group.command()
 def stop():
     """Stop the daemon"""
-    from .. import config
-
     # Try PID file first
-    pid_file = config.AGENT_PID
+    pid_file = AGENT_PID
     if pid_file.exists():
         try:
             pid = int(pid_file.read_text().strip())
@@ -138,17 +137,25 @@ def stop():
                             safe_print("[OK] Stopped")
                             return
                 else:
-                    result = subprocess.run(
+                    # Try ss first (widely available), fall back to lsof
+                    pid = None
+                    for cmd in (
+                        ["ss", "-tlnp", f"sport = :{port}"],
                         ["lsof", "-ti", f":{port}"],
-                        capture_output=True, text=True
-                    )
-                    if result.returncode == 0:
-                        for pid in result.stdout.strip().split('\n'):
-                            if pid:
-                                os.kill(int(pid), signal.SIGTERM)
+                    ):
+                        result = subprocess.run(cmd, capture_output=True, text=True)
+                        if result.returncode == 0 and result.stdout.strip():
+                            for token in result.stdout.split():
+                                if token.isdigit():
+                                    pid = int(token)
+                                    break
+                        if pid:
+                            break
+                    if pid:
+                        os.kill(pid, signal.SIGTERM)
                         safe_print("[OK] Stopped")
                         return
-            except:
+            except Exception:
                 pass
 
     safe_print("[-] Not running")
@@ -187,8 +194,8 @@ def install():
         safe_print("[!] systemd service only works on Linux")
         return
 
-    from .. import config
-    config.ensure_dir()
+    from mem.config import ensure_dir
+    ensure_dir()
 
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
     systemd_dir.mkdir(parents=True, exist_ok=True)

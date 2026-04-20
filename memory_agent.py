@@ -6,11 +6,14 @@ REST API daemon with File Memory System (MVP 8)
 Stores MD documentation attached to files and folders
 """
 
+import collections
+import functools
 import json
 import os
+import re
+import sqlite3
 import sys
 import hashlib
-from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -18,25 +21,26 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlparse, parse_qs
 import threading
 
+# ---------------------------------------------------------------------------
+# Resolve src/ so this script can be run both installed and from source tree
+# ---------------------------------------------------------------------------
+_SRC = Path(__file__).parent / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
-@contextmanager
-def _locked_append(path):
-    """Append-open a file with an exclusive advisory lock (no-op on Windows)."""
-    f = open(path, "a", encoding="utf-8")
-    try:
-        try:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        except (ImportError, OSError):
-            pass
-        yield f
-    finally:
-        try:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except (ImportError, OSError):
-            pass
-        f.close()
+from mem.config import (
+    DB_FILE as DB_PATH,
+    TOKEN_LOG as TOKEN_LOG_PATH,
+    CONFIG_FILE as CONFIG_PATH,
+    SUPER_MEMORY_DIR,
+    DEFAULT_PORT,
+)
+from mem.tokens import (
+    TOKEN_PRICES,
+    DEFAULT_PRICE,
+    log_token_usage as _log_token_usage,
+    get_token_summary as _get_token_summary,
+)
 
 
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
@@ -44,17 +48,13 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-# Database
-DB_PATH = Path.home() / ".super_memory" / "memory.db"
-TOKEN_LOG_PATH = Path.home() / ".super_memory" / "token_log.jsonl"
-CONFIG_PATH = Path.home() / ".super_memory" / "config.json"
+MAX_BODY = 1_048_576  # 1 MiB POST body cap
 
-# Ensure directory
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+_active_agent: list = [None]  # mutable cache; invalidated by save_config
 
 
 def load_config() -> dict:
-    """Load config from JSON file."""
+    """Load config from CONFIG_PATH (module-level, patchable in tests)."""
     if CONFIG_PATH.exists():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -65,25 +65,18 @@ def load_config() -> dict:
 
 
 def save_config(config: dict):
-    """Save config to JSON file."""
+    """Save config to CONFIG_PATH and invalidate the active-agent cache."""
+    _active_agent[0] = None
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
 
-# Token pricing (Anthropic API — USD per 1M tokens)
-TOKEN_PRICES = {
-    "claude-opus-4-6": {"input": 5.00, "output": 25.00},
-    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
-    "claude-haiku-4-5": {"input": 1.00, "output": 5.00},
-}
-DEFAULT_PRICE = {"input": 5.00, "output": 25.00}
-
-
 def init_db():
     """Initialize SQLite database with all tables."""
-    import sqlite3
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH))
+    conn.execute("PRAGMA journal_mode=WAL")
 
     # Agents table (multi-agent support)
     conn.execute("""
@@ -192,24 +185,25 @@ def init_db():
         )
     """)
 
-    # Migration: add agent_id column if it doesn't exist (for existing databases)
-    try:
-        conn.execute("ALTER TABLE memories ADD COLUMN agent_id TEXT DEFAULT 'default'")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_id ON memories(agent_id)")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-
-    try:
-        conn.execute("ALTER TABLE files ADD COLUMN agent_id TEXT DEFAULT 'default'")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_files_agent_id ON files(agent_id)")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-
-    try:
-        conn.execute("ALTER TABLE folders ADD COLUMN agent_id TEXT DEFAULT 'default'")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_folders_agent_id ON folders(agent_id)")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+    """)
+    applied = {row[0] for row in conn.execute("SELECT version FROM schema_version").fetchall()}
+    now_iso = datetime.now().isoformat()
+    if 1 not in applied:
+        try:
+            conn.execute("ALTER TABLE memories ADD COLUMN agent_id TEXT DEFAULT 'default'")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_id ON memories(agent_id)")
+            conn.execute("ALTER TABLE files ADD COLUMN agent_id TEXT DEFAULT 'default'")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_files_agent_id ON files(agent_id)")
+            conn.execute("ALTER TABLE folders ADD COLUMN agent_id TEXT DEFAULT 'default'")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_folders_agent_id ON folders(agent_id)")
+        except sqlite3.OperationalError:
+            pass
+        conn.execute("INSERT OR IGNORE INTO schema_version VALUES (1, ?)", (now_iso,))
 
     conn.commit()
     conn.close()
@@ -217,7 +211,6 @@ def init_db():
 
 def get_db():
     """Get database connection."""
-    import sqlite3
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
@@ -230,8 +223,10 @@ def get_registry_db():
 
 def get_active_agent() -> str:
     """Get the currently active agent name from config."""
-    config = load_config()
-    return config.get("active_agent", "default")
+    if _active_agent[0] is None:
+        config = load_config()
+        _active_agent[0] = config.get("active_agent", "default")
+    return _active_agent[0]
 
 
 def get_agent_by_name(name: str) -> dict:
@@ -245,87 +240,13 @@ def get_agent_by_name(name: str) -> dict:
 
 def prepare_search_text(text: str) -> str:
     """Clean text for FTS."""
-    import re
     text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
     text = re.sub(r'\s+', ' ', text)
     return text.lower().strip()
 
 
-def log_token_usage(model: str, usage: dict, source: str = "api"):
-    """Log token usage to token_log.jsonl for tracking spend."""
-    prices = TOKEN_PRICES.get(model, DEFAULT_PRICE)
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
-
-    input_cost = (input_tokens / 1_000_000) * prices["input"]
-    output_cost = (output_tokens / 1_000_000) * prices["output"]
-    cache_savings = (cache_read / 1_000_000) * prices["input"] * 0.9
-
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "model": model,
-        "source": source,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "cache_read_input_tokens": cache_read,
-        "cache_creation_input_tokens": cache_creation,
-        "estimated_cost_usd": round(input_cost + output_cost, 4),
-        "cache_savings_usd": round(cache_savings, 4),
-    }
-
-    try:
-        TOKEN_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with _locked_append(str(TOKEN_LOG_PATH)) as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except OSError:
-        pass
-
-    return entry
-
-
-def get_token_summary() -> dict:
-    """Aggregate token usage from token_log.jsonl."""
-    total_input = 0
-    total_output = 0
-    total_cost = 0.0
-    total_cache_savings = 0.0
-    entries = 0
-    models = set()
-    daily_costs = {}
-
-    if TOKEN_LOG_PATH.exists():
-        try:
-            with open(TOKEN_LOG_PATH, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        e = json.loads(line)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                    total_input += e.get("input_tokens", 0)
-                    total_output += e.get("output_tokens", 0)
-                    total_cost += e.get("estimated_cost_usd", 0)
-                    total_cache_savings += e.get("cache_savings_usd", 0)
-                    models.add(e.get("model", "unknown"))
-                    entries += 1
-                    day = e.get("timestamp", "")[:10]
-                    daily_costs[day] = daily_costs.get(day, 0) + e.get("estimated_cost_usd", 0)
-        except OSError:
-            pass
-
-    return {
-        "total_requests": entries,
-        "total_input_tokens": total_input,
-        "total_output_tokens": total_output,
-        "total_cost_usd": round(total_cost, 4),
-        "total_cache_savings_usd": round(total_cache_savings, 0),
-        "models_used": list(models),
-        "daily_costs": {k: round(v, 4) for k, v in sorted(daily_costs.items())},
-    }
+def log_token_usage(model: str, usage: dict, source: str = "api") -> dict:
+    return _log_token_usage(TOKEN_LOG_PATH, model, usage, source)
 
 
 class MemoryHandler(BaseHTTPRequestHandler):
@@ -339,7 +260,7 @@ class MemoryHandler(BaseHTTPRequestHandler):
         """Send JSON response."""
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', 'http://127.0.0.1:5000')
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
     
@@ -395,12 +316,13 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 if query:
                     # Use FTS5 for fast full-text search
                     try:
+                        safe_query = re.sub(r'[^\w\s]', '', query.lower())
                         cursor = conn.execute("""
                             SELECT memories.* FROM memories
                             JOIN memories_fts ON memories.id = memories_fts.rowid
                             WHERE memories_fts MATCH ? AND memories.agent_id = ?
                             ORDER BY memories.id DESC LIMIT 20
-                        """, (f'{query.lower()}*', active))
+                        """, (f'{safe_query}*', active))
                         rows = [dict(row) for row in cursor.fetchall()]
                     except Exception:
                         # Fallback to LIKE if FTS fails
@@ -450,11 +372,11 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 self.send_json({'context': context, 'agent': active})
 
             elif path == '/tokens' or path == '/tokens/summary':
-                summary = get_token_summary()
+                summary = _get_token_summary(TOKEN_LOG_PATH)
                 self.send_json(summary)
 
             elif path == '/tokens/daily':
-                summary = get_token_summary()
+                summary = _get_token_summary(TOKEN_LOG_PATH)
                 self.send_json({"daily": summary.get("daily_costs", {}), "total_usd": summary.get("total_cost_usd", 0)})
 
             elif path == '/tokens/recent':
@@ -462,8 +384,8 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 if TOKEN_LOG_PATH.exists():
                     try:
                         with open(TOKEN_LOG_PATH, "r", encoding="utf-8") as f:
-                            lines = f.readlines()
-                        for line in reversed(lines[-20:]):
+                            tail = collections.deque(f, maxlen=20)
+                        for line in reversed(list(tail)):
                             line = line.strip()
                             if not line:
                                 continue
@@ -518,17 +440,21 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
             elif path == '/projects' or path == '/projects/list':
                 reg_conn = get_registry_db()
-                cursor = reg_conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
-                rows = [dict(row) for row in cursor.fetchall()]
-                reg_conn.close()
+                try:
+                    cursor = reg_conn.execute("SELECT * FROM projects ORDER BY updated_at DESC")
+                    rows = [dict(row) for row in cursor.fetchall()]
+                finally:
+                    reg_conn.close()
                 self.send_json({'projects': rows})
 
             elif path.startswith('/projects/') and path.endswith('/files'):
                 project_name = path[10:-6]
                 reg_conn = get_registry_db()
-                cursor = reg_conn.execute("SELECT * FROM projects WHERE name = ?", (project_name,))
-                project = cursor.fetchone()
-                reg_conn.close()
+                try:
+                    cursor = reg_conn.execute("SELECT * FROM projects WHERE name = ?", (project_name,))
+                    project = cursor.fetchone()
+                finally:
+                    reg_conn.close()
                 if project:
                     root = project['root_path'] or ''
                     cursor = conn.execute("""
@@ -604,15 +530,19 @@ class MemoryHandler(BaseHTTPRequestHandler):
         """Handle POST requests."""
         parsed = urlparse(self.path)
         path = parsed.path
-        length = int(self.headers.get('Content-Length', 0))
+        length = min(int(self.headers.get('Content-Length', 0)), MAX_BODY)
         body = self.rfile.read(length).decode() if length > 0 else '{}'
-        
         try:
             data = json.loads(body) if body else {}
         except (json.JSONDecodeError, ValueError):
             data = {}
-        
         conn = get_db()
+        try:
+            self._do_post_impl(conn, path, data)
+        finally:
+            conn.close()
+
+    def _do_post_impl(self, conn, path, data):
 
         # ============================================================
         # AGENT MANAGEMENT ENDPOINTS (POST)
@@ -628,7 +558,6 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
             if not name:
                 self.send_json({'error': 'name required'}, 400)
-                conn.close()
                 return
 
             now = datetime.now().isoformat()
@@ -655,19 +584,16 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
             conn.commit()
             self.send_json({'success': True, 'name': name})
-            conn.close()
             return
 
         elif path == '/agents/delete':
             name = data.get('name', '')
             if not name:
                 self.send_json({'error': 'name required'}, 400)
-                conn.close()
                 return
 
             if name == 'default':
                 self.send_json({'error': 'Cannot delete default agent'}, 400)
-                conn.close()
                 return
 
             conn.execute("DELETE FROM agents WHERE name = ?", (name,))
@@ -680,21 +606,18 @@ class MemoryHandler(BaseHTTPRequestHandler):
                 save_config(config)
 
             self.send_json({'success': True, 'deleted': name})
-            conn.close()
             return
 
         elif path == '/agents/select':
             name = data.get('name', '')
             if not name:
                 self.send_json({'error': 'name required'}, 400)
-                conn.close()
                 return
 
             # Verify agent exists
             cursor = conn.execute("SELECT id FROM agents WHERE name = ?", (name,))
             if not cursor.fetchone():
                 self.send_json({'error': f'Agent {name} not found'}, 404)
-                conn.close()
                 return
 
             config = load_config()
@@ -702,7 +625,6 @@ class MemoryHandler(BaseHTTPRequestHandler):
             save_config(config)
 
             self.send_json({'success': True, 'active': name})
-            conn.close()
             return
 
         # Existing memory endpoints
@@ -819,7 +741,6 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
             if not filepath:
                 self.send_json({'error': 'filepath required'}, 400)
-                conn.close()
                 return
 
             now = datetime.now().isoformat()
@@ -862,7 +783,6 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
             if not folder_path:
                 self.send_json({'error': 'path required'}, 400)
-                conn.close()
                 return
 
             now = datetime.now().isoformat()
@@ -899,32 +819,33 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
             if not name:
                 self.send_json({'error': 'name required'}, 400)
-                conn.close()
                 return
 
             now = datetime.now().isoformat()
 
             reg_conn = get_registry_db()
-            cursor = reg_conn.execute("SELECT id FROM projects WHERE name = ?", (name,))
-            existing = cursor.fetchone()
+            try:
+                cursor = reg_conn.execute("SELECT id FROM projects WHERE name = ?", (name,))
+                existing = cursor.fetchone()
 
-            if existing:
-                reg_conn.execute("""
-                    UPDATE projects SET
-                        root_path = ?,
-                        architecture = ?,
-                        key_decisions = ?,
-                        updated_at = ?
-                    WHERE name = ?
-                """, (root_path, architecture, json.dumps(key_decisions), now, name))
-            else:
-                reg_conn.execute("""
-                    INSERT INTO projects (name, root_path, architecture, key_decisions, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (name, root_path, architecture, json.dumps(key_decisions), now, now))
+                if existing:
+                    reg_conn.execute("""
+                        UPDATE projects SET
+                            root_path = ?,
+                            architecture = ?,
+                            key_decisions = ?,
+                            updated_at = ?
+                        WHERE name = ?
+                    """, (root_path, architecture, json.dumps(key_decisions), now, name))
+                else:
+                    reg_conn.execute("""
+                        INSERT INTO projects (name, root_path, architecture, key_decisions, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (name, root_path, architecture, json.dumps(key_decisions), now, now))
 
-            reg_conn.commit()
-            reg_conn.close()
+                reg_conn.commit()
+            finally:
+                reg_conn.close()
             self.send_json({'success': True, 'name': name})
         
         elif path == '/files/delete':
@@ -949,9 +870,11 @@ class MemoryHandler(BaseHTTPRequestHandler):
             name = data.get('name', '')
             if name:
                 reg_conn = get_registry_db()
-                reg_conn.execute("DELETE FROM projects WHERE name = ?", (name,))
-                reg_conn.commit()
-                reg_conn.close()
+                try:
+                    reg_conn.execute("DELETE FROM projects WHERE name = ?", (name,))
+                    reg_conn.commit()
+                finally:
+                    reg_conn.close()
                 self.send_json({'success': True, 'deleted': name})
             else:
                 self.send_json({'error': 'name required'}, 400)
@@ -964,12 +887,10 @@ class MemoryHandler(BaseHTTPRequestHandler):
             mem_id = data.get('id')
             if not mem_id:
                 self.send_json({'error': 'id required'}, 400)
-                conn.close()
                 return
             cursor = conn.execute("SELECT id FROM memories WHERE id = ?", (mem_id,))
             if not cursor.fetchone():
                 self.send_json({'error': 'Memory not found'}, 404)
-                conn.close()
                 return
             conn.execute("DELETE FROM memories WHERE id = ?", (mem_id,))
             conn.commit()
@@ -980,12 +901,10 @@ class MemoryHandler(BaseHTTPRequestHandler):
             new_text = data.get('text', '').strip()
             if not mem_id or not new_text:
                 self.send_json({'error': 'id and text required'}, 400)
-                conn.close()
                 return
             cursor = conn.execute("SELECT id FROM memories WHERE id = ?", (mem_id,))
             if not cursor.fetchone():
                 self.send_json({'error': 'Memory not found'}, 404)
-                conn.close()
                 return
             conn.execute("""
                 UPDATE memories SET text = ?, search_text = ? WHERE id = ?
@@ -995,8 +914,6 @@ class MemoryHandler(BaseHTTPRequestHandler):
 
         else:
             self.send_json({'error': 'Not found'}, 404)
-
-        conn.close()
 
 
 def run_server(port=8080):

@@ -11,10 +11,14 @@
   const api = {
     async _fetch(url, opts) {
       opts = opts || {};
-      opts.headers = Object.assign({}, opts.headers || {}, {
-        'Authorization': 'Bearer ' + UI_TOKEN,
-      });
+      opts.credentials = 'include';  // send httponly cookie for session auth
+      if (UI_TOKEN) {
+        opts.headers = Object.assign({}, opts.headers || {}, {
+          'Authorization': 'Bearer ' + UI_TOKEN,
+        });
+      }
       if (opts.body && typeof opts.body !== 'string') {
+        opts.headers = opts.headers || {};
         opts.headers['Content-Type'] = 'application/json';
         opts.body = JSON.stringify(opts.body);
       }
@@ -434,8 +438,18 @@
     queue: [],
     reconnectTimer: null,
 
-    connect() {
-      const url = 'ws://127.0.0.1:5001/?token=' + encodeURIComponent(UI_TOKEN);
+    async connect() {
+      let wsToken = UI_TOKEN;
+      if (!wsToken) {
+        try {
+          const resp = await api.get('/api/ws-token');
+          wsToken = resp.token;
+        } catch (e) {
+          console.error('Failed to get WS token', e);
+          return;
+        }
+      }
+      const url = 'ws://127.0.0.1:5001/?token=' + encodeURIComponent(wsToken);
       this.ws = new WebSocket(url);
       this.ws.onopen = () => {
         this.connected = true;
