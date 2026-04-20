@@ -25,10 +25,9 @@ def isolated_db(tmp_path, monkeypatch):
     monkeypatch.setattr(ma, "DB_PATH", db)
     monkeypatch.setattr(ma, "CONFIG_PATH", cfg)
     monkeypatch.setattr(ma, "TOKEN_LOG_PATH", tok)
-    monkeypatch.setitem(ma._active_agent, 0, None)
+    ma._active_agent[0] = None
     ma.init_db()
     yield
-    # reset cache
     ma._active_agent[0] = None
 
 
@@ -123,34 +122,23 @@ def make_handler(method: str, path: str, body: bytes = b""):
     """Build a MemoryHandler instance without a real socket."""
     import memory_agent as ma
     import io
-    from http.server import BaseHTTPRequestHandler
-
-    raw = (
-        f"{method} {path} HTTP/1.1\r\n"
-        f"Host: 127.0.0.1\r\n"
-        f"Content-Length: {len(body)}\r\n"
-        "\r\n"
-    ).encode() + body
-
-    sock = FakeSocket()
-    sock._data = raw
-    handler = ma.MemoryHandler.__new__(ma.MemoryHandler)
-    handler.rfile = io.BytesIO(raw)
-    handler.wfile = io.BytesIO()
-    handler.server = types.SimpleNamespace(server_address=("127.0.0.1", 8080))
-    handler.client_address = ("127.0.0.1", 1234)
-    handler.headers = {}
-    # parse the raw request manually for headers
-    import email.parser, email.feedmanager
-    lines = raw.split(b"\r\n")
-    request_line = lines[0].decode()
-    handler.command, handler.path, handler.request_version = request_line.split()
-    header_block = b"\r\n".join(lines[1:])
     from http.client import parse_headers
-    import io as _io
-    handler.headers = parse_headers(_io.BytesIO(header_block))
-    handler.rfile = _io.BytesIO(body)
-    handler.wfile = _io.BytesIO()
+
+    header_block = (
+        f"Host: 127.0.0.1\r\n"
+        f"Content-Length: {len(body)}\r\n\r\n"
+    ).encode()
+
+    handler = ma.MemoryHandler.__new__(ma.MemoryHandler)
+    handler.command = method
+    handler.path = path
+    handler.request_version = "HTTP/1.1"
+    handler.requestline = f"{method} {path} HTTP/1.1"
+    handler.headers = parse_headers(io.BytesIO(header_block))
+    handler.rfile = io.BytesIO(body)
+    handler.wfile = io.BytesIO()
+    handler.client_address = ("127.0.0.1", 1234)
+    handler.server = types.SimpleNamespace(server_address=("127.0.0.1", 8080))
     return handler
 
 
